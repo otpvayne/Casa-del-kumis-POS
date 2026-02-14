@@ -583,17 +583,25 @@ function TicketInline({
   const [items, setItems] = useState<any[]>([]);
   const [payments, setPayments] = useState<any[]>([]);
 
+  const methodLabel = (m: string) => {
+    if (m === "CASH") return "EFECTIVO";
+    if (m === "CARD") return "TARJETA";
+    if (m === "TRANSFER") return "TRANSFERENCIA";
+    if (m === "QR") return "QR";
+    return m;
+  };
+
   useEffect(() => {
     const run = async () => {
       const { data: saleRow } = await supabase
         .from("sales")
-        .select("id, receipt_number, subtotal, tax_total, total, created_at")
+        .select("id, receipt_number, subtotal, tax_total, total, created_at, branch_id, branches(name)")
         .eq("id", saleId)
         .single();
 
       const { data: itemsRows } = await supabase
         .from("sale_items")
-        .select("qty, line_total, products(name)")
+        .select("qty, unit_price, line_total, products(name)")
         .eq("sale_id", saleId);
 
       const { data: payRows } = await supabase
@@ -607,82 +615,186 @@ function TicketInline({
 
       setTimeout(() => {
         window.print();
-        setTimeout(() => {
-          onPrinted();
-        }, 500);
+        setTimeout(() => onPrinted(), 500);
       }, 300);
     };
 
     run();
-  }, [saleId]);
+  }, [saleId, onPrinted]);
 
   if (!sale) return null;
 
+  const totalQty = items.reduce((acc, it) => acc + Number(it.qty ?? 0), 0);
+  const totalPayments = payments.reduce((acc, p) => acc + Number(p.amount ?? 0), 0);
+
+  // consecutivo temporal si no existe receipt_number
+  const receipt = sale.receipt_number
+  ? `LF-${String(sale.receipt_number).padStart(6, "0")}`
+  : String(sale.id).slice(0, 8).toUpperCase();
+
+  const branchName = sale.branches?.name ?? "Sucursal";
+
   return (
     <div className="ticket">
+    <img src="/logo.png" style={{ width: 120, margin: "0 auto", display: "block" }} />
+
+      {/* ENCABEZADO */}
       <div className="center bold">CASA DEL KUMIS</div>
-      <div className="center">Comprobante interno</div>
+      <div className="center">NIT: 000000000-0</div>
+      <div className="center">Comprobante interno - No válido DIAN</div>
 
       <div className="line" />
 
+      {/* META */}
+      <div>Fecha: {new Date(sale.created_at).toLocaleString("es-CO")}</div>
+      <div>Sucursal: {branchName}</div>
+      <div>Comprobante: {receipt}</div>
+
+      <div className="line" />
+
+      {/* ITEMS */}
       {items.map((it, i) => (
-        <div key={i} className="row">
-          <div>
-            {it.qty} x {it.products?.name}
+        <div key={i} className="item">
+          <div className="row">
+            <div className="left">
+              {it.qty} x {it.products?.name ?? "Producto"}
+            </div>
+            <div className="right">${Number(it.line_total).toLocaleString("es-CO")}</div>
           </div>
-          <div>${Number(it.line_total).toLocaleString("es-CO")}</div>
+          <div className="muted">
+            Unit: ${Number(it.unit_price).toLocaleString("es-CO")}
+          </div>
         </div>
       ))}
 
       <div className="line" />
 
+      {/* TOTALES */}
+      <div className="row">
+        <div className="left">Subtotal</div>
+        <div className="right">${Number(sale.subtotal).toLocaleString("es-CO")}</div>
+      </div>
+      <div className="row">
+        <div className="left">Impoconsumo</div>
+        <div className="right">${Number(sale.tax_total).toLocaleString("es-CO")}</div>
+      </div>
       <div className="row bold">
-        <div>TOTAL</div>
-        <div>${Number(sale.total).toLocaleString("es-CO")}</div>
+        <div className="left">TOTAL</div>
+        <div className="right">${Number(sale.total).toLocaleString("es-CO")}</div>
+        <div className="row">
+        <div className="left">Total artículos</div>
+        <div className="right">{totalQty}</div>
+</div>
+
       </div>
 
+      <div className="line" />
+
+      {/* PAGOS */}
+      <div className="bold">Pagos</div>
+      {payments.map((p, i) => (
+        <div key={i} className="row">
+          <div className="left">{methodLabel(p.method)}</div>
+          <div className="right">${Number(p.amount).toLocaleString("es-CO")}</div>
+        </div>
+      ))}
+<div className="row bold">
+  <div className="left">TOTAL PAGOS</div>
+  <div className="right">${Number(totalPayments).toLocaleString("es-CO")}</div>
+</div>
+
+      <div className="line" />
+
+      {/* FOOTER */}
+      <div className="center">Gracias por su compra</div>
+
       <style jsx global>{`
-        @media print {
-          body * {
-            visibility: hidden;
-          }
+  /* ===== TAMAÑO PAPEL POS ===== */
+  @page {
+    size: 80mm auto;
+    margin: 2mm;
+  }
 
-          .print-layer,
-          .print-layer * {
-            visibility: visible;
-          }
+  /* ===== SOLO IMPRIMIR EL TICKET ===== */
+  @media print {
+    body * {
+      visibility: hidden !important;
+    }
 
-          .print-layer {
-            position: absolute;
-            left: 0;
-            top: 0;
-            width: 80mm;
-          }
-        }
+    .print-layer,
+    .print-layer * {
+      visibility: visible !important;
+    }
 
-        .ticket {
-          font-family: Arial;
-          font-size: 12px;
-        }
+    .print-layer {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 80mm;
+      padding: 0;
+      margin: 0;
+      background: #fff;
+    }
+  }
 
-        .row {
-          display: flex;
-          justify-content: space-between;
-        }
+  /* ===== TICKET ===== */
+  .ticket {
+    font-family: Arial, sans-serif;
+    font-size: 11px;
+    width: 76mm; /* 80mm - márgenes */
+    line-height: 1.2;
+  }
 
-        .center {
-          text-align: center;
-        }
+  .center {
+    text-align: center;
+  }
 
-        .bold {
-          font-weight: bold;
-        }
+  .bold {
+    font-weight: 700;
+  }
 
-        .line {
-          border-top: 1px dashed black;
-          margin: 6px 0;
-        }
-      `}</style>
+  .line {
+    border-top: 1px dashed #000;
+    margin: 6px 0;
+  }
+
+  .row {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    margin: 2px 0;
+  }
+
+  .left {
+    flex: 1;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  .right {
+    min-width: 62px;
+    text-align: right;
+    white-space: nowrap;
+  }
+
+  .muted {
+    opacity: 0.75;
+    font-size: 10px;
+    margin-top: 1px;
+  }
+
+  .item {
+    margin-bottom: 4px;
+  }
+
+  .logo {
+    display: block;
+    margin: 0 auto 4px auto;
+    max-width: 120px;
+    height: auto;
+  }
+`}</style>
     </div>
   );
 }
