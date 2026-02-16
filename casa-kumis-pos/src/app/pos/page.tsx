@@ -394,7 +394,24 @@ if (pageError) return <div style={{ padding: 24, color: "red" }}>Error: {pageErr
 
       {/* DERECHA */}
       <div style={{ border: "1px solid #eee", borderRadius: 16, padding: 16 }}>
-        <h2>Carrito</h2>
+  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+    <h2 style={{ margin: 0 }}>Carrito</h2>
+
+    <button
+      onClick={() => router.push("/close-shift")}
+      style={{
+        padding: "8px 12px",
+        borderRadius: 10,
+        cursor: "pointer",
+        border: "1px solid #ddd",
+        background: "white",
+        fontWeight: 700,
+      }}
+    >
+      Cerrar turno
+    </button>
+  </div>
+
 
         {saleOkMsg && (
           <div style={{ background: "#eaffea", padding: 10, borderRadius: 10, marginTop: 10 }}>
@@ -665,12 +682,14 @@ function TicketInline({
             Unit: ${Number(it.unit_price).toLocaleString("es-CO")}
           </div>
         </div>
+        
       ))}
 
       <div className="line" />
 
       {/* TOTALES */}
       <div className="row">
+        
         <div className="left">Subtotal</div>
         <div className="right">${Number(sale.subtotal).toLocaleString("es-CO")}</div>
       </div>
