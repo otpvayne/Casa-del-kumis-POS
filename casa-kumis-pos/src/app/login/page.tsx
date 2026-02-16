@@ -11,24 +11,49 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const handleLogin = async () => {
-    setLoading(true);
-    setError(null);
+ const handleLogin = async () => {
+  setLoading(true);
+  setError(null);
 
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
+  const { data, error } = await supabase.auth.signInWithPassword({
+    email,
+    password,
+  });
 
-    setLoading(false);
+  setLoading(false);
 
-    if (error) {
-      setError(error.message);
-      return;
-    }
+  if (error) {
+    setError(error.message);
+    return;
+  }
 
-    router.push("/select-branch");
-  };
+  const session = data.session;
+  if (!session) {
+    setError("No se pudo obtener sesión.");
+    return;
+  }
+
+  // 🔎 Buscar rol en profiles
+  const { data: profile, error: profileError } = await supabase
+    .from("profiles")
+    .select("role")
+    .eq("user_id", session.user.id)
+    .single();
+
+  if (profileError || !profile) {
+    setError("No se encontró el rol del usuario (profiles).");
+    return;
+  }
+
+  // 🔁 Redirección por rol
+  if (profile.role === "ADMIN") {
+    router.replace("/admin");
+  } else {
+    // CASHIER
+    router.replace("/select-branch");
+  }
+};
+
 
   return (
     <div style={{ padding: 24, maxWidth: 420 }}>
