@@ -35,6 +35,9 @@ export default function AdminPage() {
 <button onClick={() => router.push("/admin/branches")} style={{ padding: 10, borderRadius: 10 }}>
   Sucursales
 </button>
+<button onClick={() => router.push("/admin/reports")} style={{ padding: 10, borderRadius: 10 }}>
+  Reportes
+</button>
 
     </div>
     
