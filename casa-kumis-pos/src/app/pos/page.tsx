@@ -350,11 +350,14 @@ if (pageError) return <div style={{ padding: 24, color: "red" }}>Error: {pageErr
         <p style={{ opacity: 0.7 }}>Impuesto: {(taxRate * 100).toFixed(2)}%</p>
 
         <h2 style={{ marginTop: 16 }}>Favoritos</h2>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 12 }}>
+        <div style={{ opacity: savingSale ? 0.5 : 1,
+  pointerEvents: savingSale ? "none" : "auto",display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 12 }}>
           {favorite.map((p) => (
-            <button
-              key={p.branch_product_id}
-              onClick={() => addToCart(p)}
+  <button
+    key={p.branch_product_id}
+    disabled={savingSale}
+    onClick={() => addToCart(p)}
+
               style={{
                 padding: 16,
                 borderRadius: 14,
@@ -371,11 +374,14 @@ if (pageError) return <div style={{ padding: 24, color: "red" }}>Error: {pageErr
         </div>
 
         <h2 style={{ marginTop: 16 }}>Todos</h2>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 12 }}>
+        <div style={{ opacity: savingSale ? 0.5 : 1,
+  pointerEvents: savingSale ? "none" : "auto",display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 12 }}>
           {others.map((p) => (
-            <button
-              key={p.branch_product_id}
-              onClick={() => addToCart(p)}
+  <button
+    key={p.branch_product_id}
+    disabled={savingSale}
+    onClick={() => addToCart(p)}
+
               style={{
                 padding: 16,
                 borderRadius: 14,
@@ -397,19 +403,22 @@ if (pageError) return <div style={{ padding: 24, color: "red" }}>Error: {pageErr
   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
     <h2 style={{ margin: 0 }}>Carrito</h2>
 
-    <button
-      onClick={() => router.push("/close-shift")}
-      style={{
-        padding: "8px 12px",
-        borderRadius: 10,
-        cursor: "pointer",
-        border: "1px solid #ddd",
-        background: "white",
-        fontWeight: 700,
-      }}
-    >
-      Cerrar turno
-    </button>
+    {shiftId && (
+  <button
+    onClick={() => router.push("/close-shift")}
+    style={{
+      padding: "8px 12px",
+      borderRadius: 10,
+      cursor: "pointer",
+      border: "1px solid #ddd",
+      background: "white",
+      fontWeight: 700,
+    }}
+  >
+    Cerrar turno
+  </button>
+)}
+
   </div>
 
 
@@ -439,15 +448,24 @@ if (pageError) return <div style={{ padding: 24, color: "red" }}>Error: {pageErr
                 <div style={{ opacity: 0.7 }}>Unit: ${it.unit_price.toLocaleString("es-CO")}</div>
 
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <button onClick={() => decQty(it.branch_product_id)} style={{ padding: "6px 10px" }}>
+                  <button
+  disabled={savingSale}
+  onClick={() => decQty(it.branch_product_id)}
+ style={{ padding: "6px 10px" }}>
                     –
                   </button>
                   <div style={{ minWidth: 24, textAlign: "center" }}>{it.qty}</div>
-                  <button onClick={() => incQty(it.branch_product_id)} style={{ padding: "6px 10px" }}>
+                  <button
+  disabled={savingSale}
+  onClick={() => incQty(it.branch_product_id)}
+ style={{ padding: "6px 10px" }}>
                     +
                   </button>
 
-                  <button onClick={() => removeItem(it.branch_product_id)} style={{ marginLeft: "auto", padding: "6px 10px" }}>
+                  <button
+  disabled={savingSale}
+  onClick={() => removeItem(it.branch_product_id)}
+style={{ marginLeft: "auto", padding: "6px 10px" }}>
                     Quitar
                   </button>
                 </div>
@@ -477,13 +495,15 @@ if (pageError) return <div style={{ padding: 24, color: "red" }}>Error: {pageErr
 
 
         <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
-          <button onClick={clearCart} disabled={cart.length === 0} style={{ padding: 10, borderRadius: 10, cursor: "pointer" }}>
+          <button
+  disabled={cart.length === 0 || savingSale}
+  onClick={clearCart}style={{ padding: 10, borderRadius: 10, cursor: "pointer" }}>
             Vaciar
           </button>
 
           <button
-            onClick={openPayModal}
-            disabled={cart.length === 0}
+  onClick={openPayModal}
+  disabled={cart.length === 0 || savingSale}
             style={{ padding: 10, borderRadius: 10, cursor: "pointer", flex: 1 }}
           >
             Cobrar
@@ -516,6 +536,7 @@ if (pageError) return <div style={{ padding: 24, color: "red" }}>Error: {pageErr
   inputMode="numeric"
   pattern="[0-9.,]*"
   value={cash}
+  disabled={savingSale}
   onChange={(e) => setCash(e.target.value)}
   style={{ width: "80%", padding: 8 }}
 />
@@ -528,6 +549,7 @@ if (pageError) return <div style={{ padding: 24, color: "red" }}>Error: {pageErr
   inputMode="numeric"
   pattern="[0-9.,]*"
   value={card}
+  disabled={savingSale}
   onChange={(e) => setCard(e.target.value)}
   style={{ width: "80%", padding: 8 }}
 />
@@ -540,6 +562,7 @@ if (pageError) return <div style={{ padding: 24, color: "red" }}>Error: {pageErr
   inputMode="numeric"
   pattern="[0-9.,]*"
   value={transfer}
+  disabled={savingSale}
   onChange={(e) => setTransfer(e.target.value)}
   style={{ width: "80%", padding: 8 }}
 />
@@ -551,6 +574,7 @@ if (pageError) return <div style={{ padding: 24, color: "red" }}>Error: {pageErr
   inputMode="numeric"
   pattern="[0-9.,]*"
   value={qr}
+  disabled={savingSale}
   onChange={(e) => setQr(e.target.value)}
   style={{ width: "80%", padding: 8 }}
 />
