@@ -84,6 +84,14 @@ export default function CloseShiftPage() {
 
   const expected = useMemo(() => totals?.expected_total ?? 0, [totals]);
 
+  // ✅ NUEVO: diferencia en vivo (confirmado - esperado)
+  const diff = useMemo(() => {
+    const v = toNum(confirmValue);
+    return Math.round((v - expected) * 100) / 100;
+  }, [confirmValue, expected]);
+
+  const diffOk = useMemo(() => diff === 0, [diff]);
+
   const closeShift = async () => {
     if (!shiftId) return;
     setErr(null);
@@ -120,7 +128,26 @@ export default function CloseShiftPage() {
 
   return (
     <div style={{ padding: 24, maxWidth: 520 }}>
-      <h1>Cerrar turno</h1>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <h1 style={{ margin: 0 }}>Cerrar turno</h1>
+
+        {/* ✅ NUEVO: volver sin cerrar */}
+        <button
+          onClick={() => router.push("/pos")}
+          disabled={closing}
+          style={{
+            padding: "10px 12px",
+            borderRadius: 12,
+            cursor: "pointer",
+            border: "1px solid #ddd",
+            background: "white",
+            fontWeight: 800,
+          }}
+        >
+          Volver al POS
+        </button>
+      </div>
+
       <p style={{ opacity: 0.7 }}>Sucursal: {branchId}</p>
       <p style={{ opacity: 0.7 }}>Turno: {shiftId}</p>
 
@@ -152,27 +179,37 @@ export default function CloseShiftPage() {
             pattern="[0-9.,]*"
             value={confirmValue}
             onChange={(e) => setConfirmValue(e.target.value)}
-            placeholder={`Ej: ${expected}`}
+            placeholder={`Ej: ${expected.toLocaleString("es-CO")}`}
+            disabled={closing}
             style={{ width: "100%", padding: 10, borderRadius: 10, border: "1px solid #ddd" }}
           />
         </label>
+
+        {/* ✅ NUEVO: diferencia en vivo (tipo Siigo) */}
+        <div style={{ marginTop: 10, opacity: 0.9 }}>
+          Diferencia:{" "}
+          <strong style={{ color: diffOk ? "green" : "red" }}>
+            {diff.toLocaleString("es-CO")}
+          </strong>
+        </div>
 
         {okMsg && <div style={{ marginTop: 10, color: "green" }}>{okMsg}</div>}
         {err && <div style={{ marginTop: 10, color: "red" }}>{err}</div>}
 
         <button
           onClick={closeShift}
-          disabled={closing}
+          disabled={closing || !diffOk}
           style={{
             width: "100%",
             padding: 12,
             marginTop: 12,
             borderRadius: 12,
-            cursor: "pointer",
+            cursor: closing || !diffOk ? "not-allowed" : "pointer",
             fontWeight: 800,
+            opacity: closing || !diffOk ? 0.6 : 1,
           }}
         >
-          {closing ? "Cerrando..." : "Cerrar turno"}
+          {closing ? "Cerrando..." : !diffOk ? "El valor no cuadra" : "Cerrar turno"}
         </button>
       </div>
     </div>

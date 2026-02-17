@@ -35,7 +35,6 @@ export default function PosPage() {
   const [pageError, setPageError] = useState<string | null>(null);
   const [payError, setPayError] = useState<string | null>(null);
 
-
   // Cobro
   const [showPay, setShowPay] = useState(false);
   const [cash, setCash] = useState<string>("0");
@@ -47,26 +46,29 @@ export default function PosPage() {
   const [lastSaleId, setLastSaleId] = useState<string | null>(null);
   const [printingSaleId, setPrintingSaleId] = useState<string | null>(null);
 
+  // ✅ NUEVO: Cliente opcional
+  const [registerCustomer, setRegisterCustomer] = useState(false);
+  const [custIdentification, setCustIdentification] = useState<string>("");
+  const [custName, setCustName] = useState<string>("");
+  const [custPhone, setCustPhone] = useState<string>("");
+  const [custEmail, setCustEmail] = useState<string>("");
 
   useEffect(() => {
-  const run = async () => {
-    const { data } = await supabase.auth.getSession();
-    if (!data.session) return router.replace("/login");
+    const run = async () => {
+      const { data } = await supabase.auth.getSession();
+      if (!data.session) return router.replace("/login");
 
-    const id = localStorage.getItem("selected_branch_id");
-    if (!id) return router.replace("/select-branch");
+      const id = localStorage.getItem("selected_branch_id");
+      if (!id) return router.replace("/select-branch");
 
-    const saved = sessionStorage.getItem(`cart_${id}`);
-    if (saved) {
-      try {
-        setCart(JSON.parse(saved));
-      } catch {}
-    }
+      const saved = sessionStorage.getItem(`cart_${id}`);
+      if (saved) {
+        try {
+          setCart(JSON.parse(saved));
+        } catch {}
+      }
 
-    setBranchId(id);
-
-    // ... aquí sigue lo de shift, settings y productos
-
+      setBranchId(id);
 
       const { data: shift, error: shiftErr } = await supabase
         .from("shifts")
@@ -125,7 +127,13 @@ export default function PosPage() {
       if (idx === -1) {
         return [
           ...prev,
-          { branch_product_id: p.branch_product_id, product_id: p.product_id, name: p.name, unit_price: p.price, qty: 1 },
+          {
+            branch_product_id: p.branch_product_id,
+            product_id: p.product_id,
+            name: p.name,
+            unit_price: p.price,
+            qty: 1,
+          },
         ];
       }
       const copy = [...prev];
@@ -136,7 +144,9 @@ export default function PosPage() {
 
   const incQty = (branchProductId: string) => {
     setSaleOkMsg(null);
-    setCart((prev) => prev.map((it) => (it.branch_product_id === branchProductId ? { ...it, qty: it.qty + 1 } : it)));
+    setCart((prev) =>
+      prev.map((it) => (it.branch_product_id === branchProductId ? { ...it, qty: it.qty + 1 } : it))
+    );
   };
 
   const decQty = (branchProductId: string) => {
@@ -157,7 +167,6 @@ export default function PosPage() {
     setSaleOkMsg(null);
     setCart([]);
     sessionStorage.removeItem(`cart_${branchId}`);
-
   };
 
   // --- Totales
@@ -169,27 +178,21 @@ export default function PosPage() {
   const others = useMemo(() => products.filter((p) => !p.is_favorite), [products]);
 
   useEffect(() => {
-  if (!branchId) return;
-  sessionStorage.setItem(`cart_${branchId}`, JSON.stringify(cart));
-}, [cart, branchId]);
+    if (!branchId) return;
+    sessionStorage.setItem(`cart_${branchId}`, JSON.stringify(cart));
+  }, [cart, branchId]);
 
   // --- Cobro helpers
   const toNum = (v: string) => {
-  if (!v) return 0;
+    if (!v) return 0;
 
-  // quitar espacios
-  let cleaned = v.trim();
+    let cleaned = v.trim();
+    cleaned = cleaned.replace(/\./g, "");
+    cleaned = cleaned.replace(",", ".");
 
-  // quitar separadores de miles (.)
-  cleaned = cleaned.replace(/\./g, "");
-
-  // convertir coma decimal a punto
-  cleaned = cleaned.replace(",", ".");
-
-  const n = Number(cleaned);
-  return Number.isNaN(n) ? 0 : n;
-};
-
+    const n = Number(cleaned);
+    return Number.isNaN(n) ? 0 : n;
+  };
 
   const paymentsSum = useMemo(() => {
     return Math.round((toNum(cash) + toNum(card) + toNum(transfer) + toNum(qr)) * 100) / 100;
@@ -198,10 +201,19 @@ export default function PosPage() {
   const openPayModal = () => {
     setPayError(null);
     setSaleOkMsg(null);
+
     setCash("0");
     setCard("0");
     setTransfer("0");
     setQr("0");
+
+    // ✅ reset cliente
+    setRegisterCustomer(false);
+    setCustIdentification("");
+    setCustName("");
+    setCustPhone("");
+    setCustEmail("");
+
     setShowPay(true);
   };
 
@@ -211,15 +223,14 @@ export default function PosPage() {
     if (!branchId || !shiftId) return;
 
     setPayError(null);
-setSavingSale(true);
+    setSavingSale(true);
 
-// Validación carrito
-if (cart.length === 0) {
-  setSavingSale(false);
-  setPayError("El carrito está vacío.");
-  return;
-}
-
+    // Validación carrito
+    if (cart.length === 0) {
+      setSavingSale(false);
+      setPayError("El carrito está vacío.");
+      return;
+    }
 
     const sum = paymentsSum;
     if (Math.round((sum - total) * 100) / 100 !== 0) {
@@ -246,6 +257,32 @@ if (cart.length === 0) {
       return;
     }
 
+    // ✅ NUEVO: customer_id opcional
+    let customerId: string | null = null;
+
+    if (registerCustomer) {
+      if (!custIdentification.trim() || !custName.trim()) {
+        setSavingSale(false);
+        setPayError("Para registrar cliente debes ingresar Identificación y Nombre.");
+        return;
+      }
+
+      const { data: custId, error: custErr } = await supabase.rpc("upsert_customer", {
+        p_identification: custIdentification.trim(),
+        p_name: custName.trim(),
+        p_phone: custPhone.trim() || null,
+        p_email: custEmail.trim() || null,
+      });
+
+      if (custErr || !custId) {
+        setSavingSale(false);
+        setPayError(custErr?.message ?? "Error creando cliente.");
+        return;
+      }
+
+      customerId = String(custId);
+    }
+
     // 1) Insert sale
     const { data: saleRow, error: saleErr } = await supabase
       .from("sales")
@@ -255,6 +292,7 @@ if (cart.length === 0) {
         subtotal,
         tax_total: taxTotal,
         total,
+        customer_id: customerId, // ✅ NUEVO
       })
       .select("id,total")
       .single();
@@ -298,7 +336,6 @@ if (cart.length === 0) {
     }
 
     // 4) Update shift expected_total += total
-    // (simple: leer actual y actualizar. Luego lo mejoramos con RPC.)
     const { data: shiftRow, error: shGetErr } = await supabase
       .from("shifts")
       .select("expected_total")
@@ -333,12 +370,10 @@ if (cart.length === 0) {
     setLastSaleId(saleId);
     setPrintingSaleId(saleId);
     sessionStorage.removeItem(`cart_${branchId}`);
-
   };
 
   if (loading) return <div style={{ padding: 24 }}>Cargando POS...</div>;
-if (pageError) return <div style={{ padding: 24, color: "red" }}>Error: {pageError}</div>;
-
+  if (pageError) return <div style={{ padding: 24, color: "red" }}>Error: {pageError}</div>;
 
   return (
     <div style={{ padding: 24, display: "grid", gridTemplateColumns: "2fr 1fr", gap: 16 }}>
@@ -350,14 +385,20 @@ if (pageError) return <div style={{ padding: 24, color: "red" }}>Error: {pageErr
         <p style={{ opacity: 0.7 }}>Impuesto: {(taxRate * 100).toFixed(2)}%</p>
 
         <h2 style={{ marginTop: 16 }}>Favoritos</h2>
-        <div style={{ opacity: savingSale ? 0.5 : 1,
-  pointerEvents: savingSale ? "none" : "auto",display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 12 }}>
+        <div
+          style={{
+            opacity: savingSale ? 0.5 : 1,
+            pointerEvents: savingSale ? "none" : "auto",
+            display: "grid",
+            gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+            gap: 12,
+          }}
+        >
           {favorite.map((p) => (
-  <button
-    key={p.branch_product_id}
-    disabled={savingSale}
-    onClick={() => addToCart(p)}
-
+            <button
+              key={p.branch_product_id}
+              disabled={savingSale}
+              onClick={() => addToCart(p)}
               style={{
                 padding: 16,
                 borderRadius: 14,
@@ -374,14 +415,20 @@ if (pageError) return <div style={{ padding: 24, color: "red" }}>Error: {pageErr
         </div>
 
         <h2 style={{ marginTop: 16 }}>Todos</h2>
-        <div style={{ opacity: savingSale ? 0.5 : 1,
-  pointerEvents: savingSale ? "none" : "auto",display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 12 }}>
+        <div
+          style={{
+            opacity: savingSale ? 0.5 : 1,
+            pointerEvents: savingSale ? "none" : "auto",
+            display: "grid",
+            gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+            gap: 12,
+          }}
+        >
           {others.map((p) => (
-  <button
-    key={p.branch_product_id}
-    disabled={savingSale}
-    onClick={() => addToCart(p)}
-
+            <button
+              key={p.branch_product_id}
+              disabled={savingSale}
+              onClick={() => addToCart(p)}
               style={{
                 padding: 16,
                 borderRadius: 14,
@@ -400,32 +447,34 @@ if (pageError) return <div style={{ padding: 24, color: "red" }}>Error: {pageErr
 
       {/* DERECHA */}
       <div style={{ border: "1px solid #eee", borderRadius: 16, padding: 16 }}>
-  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-    <h2 style={{ margin: 0 }}>Carrito</h2>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <h2 style={{ margin: 0 }}>Carrito</h2>
 
-    {shiftId && (
-  <button
-    onClick={() => router.push("/close-shift")}
-    style={{
-      padding: "8px 12px",
-      borderRadius: 10,
-      cursor: "pointer",
-      border: "1px solid #ddd",
-      background: "white",
-      fontWeight: 700,
-    }}
-  >
-    Cerrar turno
-  </button>
-)}
-
-  </div>
-
+          {shiftId && (
+            <button
+              onClick={() => {
+                if (cart.length > 0) {
+                  alert("No puedes cerrar turno con productos en el carrito. Finaliza la venta o vacía el carrito.");
+                  return;
+                }
+                router.push("/close-shift");
+              }}
+              style={{
+                padding: "8px 12px",
+                borderRadius: 10,
+                cursor: "pointer",
+                border: "1px solid #ddd",
+                background: "white",
+                fontWeight: 700,
+              }}
+            >
+              Cerrar turno
+            </button>
+          )}
+        </div>
 
         {saleOkMsg && (
-          <div style={{ background: "#eaffea", padding: 10, borderRadius: 10, marginTop: 10 }}>
-            {saleOkMsg}
-          </div>
+          <div style={{ background: "#eaffea", padding: 10, borderRadius: 10, marginTop: 10 }}>{saleOkMsg}</div>
         )}
 
         {cart.length === 0 ? (
@@ -448,31 +497,24 @@ if (pageError) return <div style={{ padding: 24, color: "red" }}>Error: {pageErr
                 <div style={{ opacity: 0.7 }}>Unit: ${it.unit_price.toLocaleString("es-CO")}</div>
 
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <button
-  disabled={savingSale}
-  onClick={() => decQty(it.branch_product_id)}
- style={{ padding: "6px 10px" }}>
+                  <button disabled={savingSale} onClick={() => decQty(it.branch_product_id)} style={{ padding: "6px 10px" }}>
                     –
                   </button>
                   <div style={{ minWidth: 24, textAlign: "center" }}>{it.qty}</div>
-                  <button
-  disabled={savingSale}
-  onClick={() => incQty(it.branch_product_id)}
- style={{ padding: "6px 10px" }}>
+                  <button disabled={savingSale} onClick={() => incQty(it.branch_product_id)} style={{ padding: "6px 10px" }}>
                     +
                   </button>
 
                   <button
-  disabled={savingSale}
-  onClick={() => removeItem(it.branch_product_id)}
-style={{ marginLeft: "auto", padding: "6px 10px" }}>
+                    disabled={savingSale}
+                    onClick={() => removeItem(it.branch_product_id)}
+                    style={{ marginLeft: "auto", padding: "6px 10px" }}
+                  >
                     Quitar
                   </button>
                 </div>
 
-                <div style={{ fontWeight: 700 }}>
-                  Línea: ${(it.unit_price * it.qty).toLocaleString("es-CO")}
-                </div>
+                <div style={{ fontWeight: 700 }}>Línea: ${(it.unit_price * it.qty).toLocaleString("es-CO")}</div>
               </div>
             ))}
           </div>
@@ -493,17 +535,14 @@ style={{ marginLeft: "auto", padding: "6px 10px" }}>
           <strong>${total.toLocaleString("es-CO")}</strong>
         </div>
 
-
         <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
-          <button
-  disabled={cart.length === 0 || savingSale}
-  onClick={clearCart}style={{ padding: 10, borderRadius: 10, cursor: "pointer" }}>
+          <button disabled={cart.length === 0 || savingSale} onClick={clearCart} style={{ padding: 10, borderRadius: 10, cursor: "pointer" }}>
             Vaciar
           </button>
 
           <button
-  onClick={openPayModal}
-  disabled={cart.length === 0 || savingSale}
+            onClick={openPayModal}
+            disabled={cart.length === 0 || savingSale}
             style={{ padding: 10, borderRadius: 10, cursor: "pointer", flex: 1 }}
           >
             Cobrar
@@ -522,9 +561,10 @@ style={{ marginLeft: "auto", padding: "6px 10px" }}>
             alignItems: "center",
             justifyContent: "center",
             padding: 16,
+            zIndex: 50,
           }}
         >
-          <div style={{ width: 420, background: "white", borderRadius: 16, padding: 16 }}>
+          <div style={{ width: 460, background: "white", borderRadius: 16, padding: 16 }}>
             <h2>Cobrar</h2>
             <p style={{ opacity: 0.7 }}>Total a pagar: ${total.toLocaleString("es-CO")}</p>
 
@@ -532,59 +572,112 @@ style={{ marginLeft: "auto", padding: "6px 10px" }}>
               <label>
                 Efectivo
                 <input
-  type="text"
-  inputMode="numeric"
-  pattern="[0-9.,]*"
-  value={cash}
-  disabled={savingSale}
-  onChange={(e) => setCash(e.target.value)}
-  style={{ width: "80%", padding: 8 }}
-/>
-
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9.,]*"
+                  value={cash}
+                  disabled={savingSale}
+                  onChange={(e) => setCash(e.target.value)}
+                  style={{ width: "80%", padding: 8 }}
+                />
               </label>
+
               <label>
                 Tarjeta
                 <input
-  type="text"
-  inputMode="numeric"
-  pattern="[0-9.,]*"
-  value={card}
-  disabled={savingSale}
-  onChange={(e) => setCard(e.target.value)}
-  style={{ width: "80%", padding: 8 }}
-/>
-
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9.,]*"
+                  value={card}
+                  disabled={savingSale}
+                  onChange={(e) => setCard(e.target.value)}
+                  style={{ width: "80%", padding: 8 }}
+                />
               </label>
+
               <label>
                 Transferencia
                 <input
-  type="text"
-  inputMode="numeric"
-  pattern="[0-9.,]*"
-  value={transfer}
-  disabled={savingSale}
-  onChange={(e) => setTransfer(e.target.value)}
-  style={{ width: "80%", padding: 8 }}
-/>
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9.,]*"
+                  value={transfer}
+                  disabled={savingSale}
+                  onChange={(e) => setTransfer(e.target.value)}
+                  style={{ width: "80%", padding: 8 }}
+                />
               </label>
+
               <label>
                 QR
                 <input
-  type="text"
-  inputMode="numeric"
-  pattern="[0-9.,]*"
-  value={qr}
-  disabled={savingSale}
-  onChange={(e) => setQr(e.target.value)}
-  style={{ width: "80%", padding: 8 }}
-/>
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9.,]*"
+                  value={qr}
+                  disabled={savingSale}
+                  onChange={(e) => setQr(e.target.value)}
+                  style={{ width: "80%", padding: 8 }}
+                />
               </label>
 
               <div style={{ marginTop: 6 }}>
                 <strong>Pagos:</strong> ${paymentsSum.toLocaleString("es-CO")}
               </div>
 
-                {payError && <div style={{ color: "red" }}>{payError}</div>}
+              {/* ✅ NUEVO: Cliente opcional */}
+              <div style={{ border: "1px solid #eee", borderRadius: 12, padding: 12, marginTop: 6 }}>
+                <label style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <input
+                    type="checkbox"
+                    checked={registerCustomer}
+                    disabled={savingSale}
+                    onChange={(e) => setRegisterCustomer(e.target.checked)}
+                  />
+                  <strong>Registrar cliente</strong>
+                </label>
+
+                {!registerCustomer && (
+                  <div style={{ marginTop: 6, opacity: 0.75 }}>
+                    Cliente: <strong>CONSUMIDOR FINAL</strong>
+                  </div>
+                )}
+
+                {registerCustomer && (
+                  <div style={{ display: "grid", gap: 8, marginTop: 10 }}>
+                    <input
+                      value={custIdentification}
+                      disabled={savingSale}
+                      onChange={(e) => setCustIdentification(e.target.value)}
+                      placeholder="Identificación (cédula/NIT)"
+                      style={{ width: "100%", padding: 10, borderRadius: 10, border: "1px solid #ddd" }}
+                    />
+                    <input
+                      value={custName}
+                      disabled={savingSale}
+                      onChange={(e) => setCustName(e.target.value)}
+                      placeholder="Nombre / Razón social"
+                      style={{ width: "100%", padding: 10, borderRadius: 10, border: "1px solid #ddd" }}
+                    />
+                    <input
+                      value={custPhone}
+                      disabled={savingSale}
+                      onChange={(e) => setCustPhone(e.target.value)}
+                      placeholder="Teléfono (opcional)"
+                      style={{ width: "100%", padding: 10, borderRadius: 10, border: "1px solid #ddd" }}
+                    />
+                    <input
+                      value={custEmail}
+                      disabled={savingSale}
+                      onChange={(e) => setCustEmail(e.target.value)}
+                      placeholder="Email (opcional)"
+                      style={{ width: "100%", padding: 10, borderRadius: 10, border: "1px solid #ddd" }}
+                    />
+                  </div>
+                )}
+              </div>
+
+              {payError && <div style={{ color: "red" }}>{payError}</div>}
 
               <div style={{ display: "flex", gap: 10, marginTop: 10 }}>
                 <button onClick={closePayModal} disabled={savingSale} style={{ padding: 10, borderRadius: 10 }}>
@@ -599,20 +692,21 @@ style={{ marginLeft: "auto", padding: "6px 10px" }}>
           </div>
         </div>
       )}
-      {printingSaleId && (
-  <div className="print-layer">
-    <TicketInline
-      saleId={printingSaleId}
-      onPrinted={() => {
-        setPrintingSaleId(null);
-      }}
-    />
-  </div>
-)}
 
+      {printingSaleId && (
+        <div className="print-layer">
+          <TicketInline
+            saleId={printingSaleId}
+            onPrinted={() => {
+              setPrintingSaleId(null);
+            }}
+          />
+        </div>
+      )}
     </div>
   );
 }
+
 function TicketInline({
   saleId,
   onPrinted,
@@ -636,7 +730,7 @@ function TicketInline({
     const run = async () => {
       const { data: saleRow } = await supabase
         .from("sales")
-        .select("id, receipt_number, subtotal, tax_total, total, created_at, branch_id, branches(name)")
+        .select("id, receipt_number, subtotal, tax_total, total, created_at, branch_id, branches(name), customers(identification,name)")
         .eq("id", saleId)
         .single();
 
@@ -668,16 +762,18 @@ function TicketInline({
   const totalQty = items.reduce((acc, it) => acc + Number(it.qty ?? 0), 0);
   const totalPayments = payments.reduce((acc, p) => acc + Number(p.amount ?? 0), 0);
 
-  // consecutivo temporal si no existe receipt_number
   const receipt = sale.receipt_number
-  ? `LF-${String(sale.receipt_number).padStart(6, "0")}`
-  : String(sale.id).slice(0, 8).toUpperCase();
+    ? `LF-${String(sale.receipt_number).padStart(6, "0")}`
+    : String(sale.id).slice(0, 8).toUpperCase();
 
   const branchName = sale.branches?.name ?? "Sucursal";
 
+  const customerName = sale.customers?.name ?? "CONSUMIDOR FINAL";
+  const customerId = sale.customers?.identification ?? null;
+
   return (
     <div className="ticket">
-    <img src="/logo.png" style={{ width: 120, margin: "0 auto", display: "block" }} />
+      <img src="/logo.png" style={{ width: 120, margin: "0 auto", display: "block" }} />
 
       {/* ENCABEZADO */}
       <div className="center bold">CASA DEL KUMIS</div>
@@ -693,6 +789,12 @@ function TicketInline({
 
       <div className="line" />
 
+      {/* ✅ NUEVO: CLIENTE */}
+      <div>Cliente: {customerName}</div>
+      {customerId && <div>Identificación: {customerId}</div>}
+
+      <div className="line" />
+
       {/* ITEMS */}
       {items.map((it, i) => (
         <div key={i} className="item">
@@ -702,18 +804,14 @@ function TicketInline({
             </div>
             <div className="right">${Number(it.line_total).toLocaleString("es-CO")}</div>
           </div>
-          <div className="muted">
-            Unit: ${Number(it.unit_price).toLocaleString("es-CO")}
-          </div>
+          <div className="muted">Unit: ${Number(it.unit_price).toLocaleString("es-CO")}</div>
         </div>
-        
       ))}
 
       <div className="line" />
 
       {/* TOTALES */}
       <div className="row">
-        
         <div className="left">Subtotal</div>
         <div className="right">${Number(sale.subtotal).toLocaleString("es-CO")}</div>
       </div>
@@ -721,14 +819,15 @@ function TicketInline({
         <div className="left">Impoconsumo</div>
         <div className="right">${Number(sale.tax_total).toLocaleString("es-CO")}</div>
       </div>
+
       <div className="row bold">
         <div className="left">TOTAL</div>
         <div className="right">${Number(sale.total).toLocaleString("es-CO")}</div>
-        <div className="row">
+      </div>
+
+      <div className="row">
         <div className="left">Total artículos</div>
         <div className="right">{totalQty}</div>
-</div>
-
       </div>
 
       <div className="line" />
@@ -741,10 +840,10 @@ function TicketInline({
           <div className="right">${Number(p.amount).toLocaleString("es-CO")}</div>
         </div>
       ))}
-<div className="row bold">
-  <div className="left">TOTAL PAGOS</div>
-  <div className="right">${Number(totalPayments).toLocaleString("es-CO")}</div>
-</div>
+      <div className="row bold">
+        <div className="left">TOTAL PAGOS</div>
+        <div className="right">${Number(totalPayments).toLocaleString("es-CO")}</div>
+      </div>
 
       <div className="line" />
 
@@ -752,92 +851,89 @@ function TicketInline({
       <div className="center">Gracias por su compra</div>
 
       <style jsx global>{`
-  /* ===== TAMAÑO PAPEL POS ===== */
-  @page {
-    size: 80mm auto;
-    margin: 2mm;
-  }
+        @page {
+          size: 80mm auto;
+          margin: 2mm;
+        }
 
-  /* ===== SOLO IMPRIMIR EL TICKET ===== */
-  @media print {
-    body * {
-      visibility: hidden !important;
-    }
+        @media print {
+          body * {
+            visibility: hidden !important;
+          }
 
-    .print-layer,
-    .print-layer * {
-      visibility: visible !important;
-    }
+          .print-layer,
+          .print-layer * {
+            visibility: visible !important;
+          }
 
-    .print-layer {
-      position: absolute;
-      left: 0;
-      top: 0;
-      width: 80mm;
-      padding: 0;
-      margin: 0;
-      background: #fff;
-    }
-  }
+          .print-layer {
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 80mm;
+            padding: 0;
+            margin: 0;
+            background: #fff;
+          }
+        }
 
-  /* ===== TICKET ===== */
-  .ticket {
-    font-family: Arial, sans-serif;
-    font-size: 11px;
-    width: 76mm; /* 80mm - márgenes */
-    line-height: 1.2;
-  }
+        .ticket {
+          font-family: Arial, sans-serif;
+          font-size: 11px;
+          width: 76mm;
+          line-height: 1.2;
+        }
 
-  .center {
-    text-align: center;
-  }
+        .center {
+          text-align: center;
+        }
 
-  .bold {
-    font-weight: 700;
-  }
+        .bold {
+          font-weight: 700;
+        }
 
-  .line {
-    border-top: 1px dashed #000;
-    margin: 6px 0;
-  }
+        .line {
+          border-top: 1px dashed #000;
+          margin: 6px 0;
+        }
 
-  .row {
-    display: flex;
-    justify-content: space-between;
-    gap: 8px;
-    margin: 2px 0;
-  }
+        .row {
+          display: flex;
+          justify-content: space-between;
+          gap: 8px;
+          margin: 2px 0;
+        }
 
-  .left {
-    flex: 1;
-    overflow: hidden;
-    white-space: nowrap;
-    text-overflow: ellipsis;
-  }
+        .left {
+          flex: 1;
+          overflow: hidden;
+          white-space: nowrap;
+          text-overflow: ellipsis;
+        }
 
-  .right {
-    min-width: 62px;
-    text-align: right;
-    white-space: nowrap;
-  }
+        .right {
+          min-width: 62px;
+          text-align: right;
+          white-space: nowrap;
+        }
 
-  .muted {
-    opacity: 0.75;
-    font-size: 10px;
-    margin-top: 1px;
-  }
+        .muted {
+          opacity: 0.75;
+          font-size: 10px;
+          margin-top: 1px;
+        }
 
-  .item {
-    margin-bottom: 4px;
-  }
+        .item {
+          margin-bottom: 4px;
+        }
 
-  .logo {
-    display: block;
-    margin: 0 auto 4px auto;
-    max-width: 120px;
-    height: auto;
-  }
-`}</style>
+        .logo {
+          display: block;
+          margin: 0 auto 4px auto;
+          max-width: 120px;
+          height: auto;
+        }
+      `}</style>
     </div>
   );
 }
