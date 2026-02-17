@@ -6,6 +6,8 @@ import { useRouter } from "next/navigation";
 import { requireRole } from "@/lib/requireRole";
 
 type Branch = { id: string; name: string };
+
+// ✅ si luego agregas image_url en products, aquí puedes incluirlo
 type Product = { id: string; name: string };
 
 type BranchProduct = {
@@ -38,6 +40,10 @@ export default function AdminProductsPage() {
   const [assignPrice, setAssignPrice] = useState<string>("0");
   const [assigning, setAssigning] = useState(false);
 
+  // ✅ eliminar producto
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [deactivatingId, setDeactivatingId] = useState<string | null>(null);
+
   const loadAll = async () => {
     setErr(null);
     setLoading(true);
@@ -58,19 +64,18 @@ export default function AdminProductsPage() {
 
     setBranches(b ?? []);
     setProducts(p ?? []);
-    setBranchProducts((bp ?? []).map((x: any) => ({
-      id: x.id,
-      branch_id: x.branch_id,
-      product_id: x.product_id,
-      price: Number(x.price ?? 0),
-      is_active: Boolean(x.is_active),
-      is_favorite: Boolean(x.is_favorite),
-    })));
+    setBranchProducts(
+      (bp ?? []).map((x: any) => ({
+        id: x.id,
+        branch_id: x.branch_id,
+        product_id: x.product_id,
+        price: Number(x.price ?? 0),
+        is_active: Boolean(x.is_active),
+        is_favorite: Boolean(x.is_favorite),
+      }))
+    );
 
-    // default branch
-    if (!selectedBranchId && (b?.length ?? 0) > 0) {
-      setSelectedBranchId(b![0].id);
-    }
+    if (!selectedBranchId && (b?.length ?? 0) > 0) setSelectedBranchId(b![0].id);
 
     setLoading(false);
   };
@@ -120,25 +125,15 @@ export default function AdminProductsPage() {
     setErr(null);
     setAssigning(true);
 
-    // Evitar duplicado: si ya existe branch_product, lo actualizamos
-    const existing = branchProducts.find(
-      (x) => x.branch_id === selectedBranchId && x.product_id === assignProductId
-    );
+    const existing = branchProducts.find((x) => x.branch_id === selectedBranchId && x.product_id === assignProductId);
 
     if (existing) {
-      const { error } = await supabase
-        .from("branch_products")
-        .update({ price, is_active: true })
-        .eq("id", existing.id);
+      const { error } = await supabase.from("branch_products").update({ price, is_active: true }).eq("id", existing.id);
 
       setAssigning(false);
-
       if (error) return setErr(error.message);
 
-      setBranchProducts((prev) =>
-        prev.map((x) => (x.id === existing.id ? { ...x, price, is_active: true } : x))
-      );
-
+      setBranchProducts((prev) => prev.map((x) => (x.id === existing.id ? { ...x, price, is_active: true } : x)));
       return;
     }
 
@@ -192,6 +187,99 @@ export default function AdminProductsPage() {
     setBranchProducts((prev) => prev.map((x) => (x.id === id ? { ...x, ...patch } : x)));
   };
 
+  // =============================
+  // ✅ CRUD: DELETE PRODUCT (seguro)
+  // =============================
+
+  // cuenta asignaciones por producto (para mostrar en tabla)
+  const assignCountByProduct = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const bp of branchProducts) {
+      map.set(bp.product_id, (map.get(bp.product_id) ?? 0) + 1);
+    }
+    return map;
+  }, [branchProducts]);
+
+  // ✅ desactivar el producto en TODAS las sucursales (lo saca del POS)
+  const deactivateEverywhere = async (productId: string) => {
+    setErr(null);
+    setDeactivatingId(productId);
+
+    try {
+      const { error } = await supabase
+        .from("branch_products")
+        .update({ is_active: false, is_favorite: false })
+        .eq("product_id", productId);
+
+      if (error) throw new Error(error.message);
+
+      setBranchProducts((prev) =>
+        prev.map((x) =>
+          x.product_id === productId ? { ...x, is_active: false, is_favorite: false } : x
+        )
+      );
+    } catch (e: any) {
+      setErr(e.message ?? "No se pudo desactivar.");
+    } finally {
+      setDeactivatingId(null);
+    }
+  };
+
+  const deleteProduct = async (productId: string) => {
+  setErr(null);
+
+  const prod = products.find((p) => p.id === productId);
+  const name = prod?.name ?? "este producto";
+
+  const ok = window.confirm(
+    `¿Seguro que quieres eliminar "${name}"?\n\nSe eliminará de sucursales (branch_products) y luego el producto.\nOJO: si ya tiene ventas, NO se puede borrar.`
+  );
+  if (!ok) return;
+
+  setDeletingId(productId);
+
+  try {
+    // 1) Bloqueo si ya tuvo ventas (sale_items)
+    const { count, error: salesCountErr } = await supabase
+      .from("sale_items")
+      .select("id", { count: "exact", head: true })
+      .eq("product_id", productId);
+
+    if (salesCountErr) throw new Error(salesCountErr.message);
+
+    if ((count ?? 0) > 0) {
+      throw new Error(
+        `No se puede borrar porque ya tiene ventas registradas (${count}). En vez de borrar, desactívalo para que no salga en el POS.`
+      );
+    }
+
+    // 2) ✅ si NO tiene ventas, eliminamos asignaciones primero
+    const { error: delBpErr } = await supabase
+      .from("branch_products")
+      .delete()
+      .eq("product_id", productId);
+
+    if (delBpErr) throw new Error(delBpErr.message);
+
+    // 3) borrar producto
+    const { error: delProdErr } = await supabase
+      .from("products")
+      .delete()
+      .eq("id", productId);
+
+    if (delProdErr) throw new Error(delProdErr.message);
+
+    // 4) actualizar UI
+    setBranchProducts((prev) => prev.filter((bp) => bp.product_id !== productId));
+    setProducts((prev) => prev.filter((p) => p.id !== productId));
+  } catch (e: any) {
+    setErr(e.message ?? "No se pudo borrar.");
+  } finally {
+    setDeletingId(null);
+  }
+};
+
+
   if (loading) return <div style={{ padding: 24 }}>Cargando admin...</div>;
   if (err) return <div style={{ padding: 24, color: "red" }}>Error: {err}</div>;
 
@@ -214,13 +302,90 @@ export default function AdminProductsPage() {
             placeholder="Nombre del producto"
             style={{ flex: 1, padding: 10, borderRadius: 10, border: "1px solid #ddd" }}
           />
-          <button
-            onClick={createProduct}
-            disabled={creating}
-            style={{ padding: 10, borderRadius: 10, fontWeight: 700 }}
-          >
+          <button onClick={createProduct} disabled={creating} style={{ padding: 10, borderRadius: 10, fontWeight: 700 }}>
             {creating ? "Creando..." : "Crear"}
           </button>
+        </div>
+
+        {/* ✅ LISTA + DELETE */}
+        <div style={{ marginTop: 14, border: "1px solid #eee", borderRadius: 12, overflow: "hidden" }}>
+          <div style={{ padding: 10, borderBottom: "1px solid #eee", background: "#fafafa", fontWeight: 800 }}>
+            Productos creados ({products.length})
+          </div>
+
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr style={{ background: "#fff" }}>
+                  <th style={th}>Producto</th>
+                  <th style={th}>Asignado a sucursales</th>
+                  <th style={th}>Acciones</th>
+                </tr>
+              </thead>
+              <tbody>
+                {products.map((p) => {
+                  const assigned = assignCountByProduct.get(p.id) ?? 0;
+                  const busyDeleting = deletingId === p.id;
+                  const busyDeact = deactivatingId === p.id;
+
+                  return (
+                    <tr key={p.id}>
+                      <td style={td}>{p.name}</td>
+                      <td style={td}>{assigned}</td>
+                      <td style={td}>
+                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                          <button
+                            onClick={() => deactivateEverywhere(p.id)}
+                            disabled={busyDeact}
+                            style={{
+                              padding: "8px 10px",
+                              borderRadius: 10,
+                              border: "1px solid #ddd",
+                              background: "white",
+                              cursor: "pointer",
+                              fontWeight: 800,
+                            }}
+                            title="Lo saca del POS en todas las sucursales"
+                          >
+                            {busyDeact ? "Desactivando..." : "Desactivar en todas"}
+                          </button>
+
+                          <button
+                            onClick={() => deleteProduct(p.id)}
+                            disabled={busyDeleting}
+                            style={{
+                              padding: "8px 10px",
+                              borderRadius: 10,
+                              border: "1px solid #ddd",
+                              background: busyDeleting ? "#999" : "black",
+                              color: "white",
+                              cursor: "pointer",
+                              fontWeight: 900,
+                            }}
+                            title="Solo borra si NO hay ventas y NO está asignado"
+                          >
+                            {busyDeleting ? "Eliminando..." : "Eliminar"}
+                          </button>
+                        </div>
+
+                        <div style={{ marginTop: 6, fontSize: 12, opacity: 0.7 }}>
+                          Tip: si el producto ya tuvo ventas, no se puede borrar. Desactívalo.
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+
+                {products.length === 0 && (
+                  <tr>
+                    <td style={td} colSpan={3}>
+                      No hay productos creados todavía.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
 
@@ -244,7 +409,7 @@ export default function AdminProductsPage() {
             </select>
           </label>
 
-          <button onClick={() => loadAll().catch(()=>{})} style={{ padding: 10, borderRadius: 10 }}>
+          <button onClick={() => loadAll().catch(() => {})} style={{ padding: 10, borderRadius: 10 }}>
             Refrescar
           </button>
         </div>
@@ -273,11 +438,7 @@ export default function AdminProductsPage() {
             style={{ padding: 10, borderRadius: 10, border: "1px solid #ddd", width: 140 }}
           />
 
-          <button
-            onClick={assignToBranch}
-            disabled={assigning}
-            style={{ padding: 10, borderRadius: 10, fontWeight: 800 }}
-          >
+          <button onClick={assignToBranch} disabled={assigning} style={{ padding: 10, borderRadius: 10, fontWeight: 800 }}>
             {assigning ? "Asignando..." : "Asignar / Activar"}
           </button>
         </div>
@@ -309,19 +470,11 @@ export default function AdminProductsPage() {
                   </td>
 
                   <td style={td}>
-                    <input
-                      type="checkbox"
-                      checked={r.is_active}
-                      onChange={(e) => updateBranchProduct(r.id, { is_active: e.target.checked })}
-                    />
+                    <input type="checkbox" checked={r.is_active} onChange={(e) => updateBranchProduct(r.id, { is_active: e.target.checked })} />
                   </td>
 
                   <td style={td}>
-                    <input
-                      type="checkbox"
-                      checked={r.is_favorite}
-                      onChange={(e) => updateBranchProduct(r.id, { is_favorite: e.target.checked })}
-                    />
+                    <input type="checkbox" checked={r.is_favorite} onChange={(e) => updateBranchProduct(r.id, { is_favorite: e.target.checked })} />
                   </td>
                 </tr>
               ))}
@@ -336,9 +489,7 @@ export default function AdminProductsPage() {
           </table>
         </div>
 
-        <div style={{ marginTop: 10, opacity: 0.7 }}>
-          Tip: favoritos salen primero en el POS.
-        </div>
+        <div style={{ marginTop: 10, opacity: 0.7 }}>Tip: favoritos salen primero en el POS.</div>
       </div>
     </div>
   );

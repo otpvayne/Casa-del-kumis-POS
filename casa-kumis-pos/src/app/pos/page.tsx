@@ -8,9 +8,11 @@ type PosProduct = {
   branch_product_id: string;
   product_id: string;
   name: string;
-  price: number; // base sin impuesto
+  image_url?: string | null;
+  price: number;
   is_favorite: boolean;
 };
+
 
 type CartItem = {
   branch_product_id: string;
@@ -92,7 +94,7 @@ export default function PosPage() {
 
       const { data: rows, error: prodErr } = await supabase
         .from("branch_products")
-        .select("id, product_id, price, is_favorite, products(name)")
+        .select("id, product_id, price, is_favorite, products(name,image_url)")
         .eq("branch_id", id)
         .eq("is_active", true)
         .order("is_favorite", { ascending: false });
@@ -104,13 +106,14 @@ export default function PosPage() {
       }
 
       const mapped: PosProduct[] =
-        (rows ?? []).map((r: any) => ({
-          branch_product_id: r.id,
-          product_id: r.product_id,
-          name: r.products?.name ?? "Producto",
-          price: Number(r.price ?? 0),
-          is_favorite: Boolean(r.is_favorite),
-        })) ?? [];
+  (rows ?? []).map((r: any) => ({
+    branch_product_id: r.id,
+    product_id: r.product_id,
+    name: r.products?.name ?? "Producto",
+    image_url: r.products?.image_url ?? null,
+    price: Number(r.price ?? 0),
+    is_favorite: Boolean(r.is_favorite),
+  })) ?? [];
 
       setProducts(mapped);
       setLoading(false);
@@ -400,16 +403,67 @@ export default function PosPage() {
               disabled={savingSale}
               onClick={() => addToCart(p)}
               style={{
-                padding: 16,
-                borderRadius: 14,
-                border: "1px solid #ddd",
-                cursor: "pointer",
-                fontSize: 16,
-                textAlign: "left",
-              }}
+  padding: 12,
+  borderRadius: 14,
+  border: "1px solid #ddd",
+  cursor: "pointer",
+  fontSize: 14,
+  textAlign: "left",
+  display: "flex",
+  flexDirection: "column",
+  height: 190, // 🔥 altura fija para todos
+}}
             >
-              <div style={{ fontWeight: 700 }}>{p.name}</div>
-              <div style={{ opacity: 0.7 }}>${p.price.toLocaleString("es-CO")}</div>
+              {/* IMAGEN */}
+<div
+  style={{
+    width: "100%",
+    height: 110, // 🔥 altura fija
+    borderRadius: 12,
+    overflow: "hidden",
+    marginBottom: 8,
+    background: "#f5f5f5",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+  }}
+>
+  {p.image_url ? (
+    <img
+  src={p.image_url}
+  alt={p.name}
+  style={{
+    width: "100%",
+    height: "100%",
+    objectFit: "contain",      // ✅ NO recorta, muestra completa
+    objectPosition: "center",  // ✅ centrada
+  }}
+/>
+
+  ) : (
+    <span style={{ fontSize: 12, opacity: 0.5 }}>Sin imagen</span>
+  )}
+</div>
+
+
+{/* NOMBRE */}
+<div
+  style={{
+    fontWeight: 600,
+    fontSize: 14,
+    lineHeight: "16px",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+  }}
+>
+  {p.name}
+</div>
+
+<div style={{ opacity: 0.7, marginTop: 4 }}>
+  ${p.price.toLocaleString("es-CO")}
+</div>
+
             </button>
           ))}
         </div>
@@ -430,16 +484,70 @@ export default function PosPage() {
               disabled={savingSale}
               onClick={() => addToCart(p)}
               style={{
-                padding: 16,
-                borderRadius: 14,
-                border: "1px solid #ddd",
-                cursor: "pointer",
-                fontSize: 16,
-                textAlign: "left",
-              }}
+  padding: 12,
+  borderRadius: 14,
+  border: "1px solid #ddd",
+  cursor: "pointer",
+  fontSize: 14,
+  textAlign: "left",
+  display: "flex",
+  flexDirection: "column",
+  height: 190, // 🔥 altura fija para todos
+}}
+
             >
-              <div style={{ fontWeight: 700 }}>{p.name}</div>
-              <div style={{ opacity: 0.7 }}>${p.price.toLocaleString("es-CO")}</div>
+              {/* IMAGEN */}
+<div
+  style={{
+    width: "100%",
+    height: 110, // 🔥 altura fija
+    borderRadius: 12,
+    overflow: "hidden",
+    marginBottom: 8,
+    background: "#f5f5f5",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+  }}
+>
+  {p.image_url ? (
+    <img
+  src={p.image_url}
+  alt={p.name}
+  style={{
+    width: "100%",
+    height: "100%",
+    objectFit: "contain",      // ✅ NO recorta, muestra completa
+    objectPosition: "center",  // ✅ centrada
+  }}
+/>
+
+  ) : (
+    <span style={{ fontSize: 12, opacity: 0.5 }}>Sin imagen</span>
+  )}
+</div>
+
+
+
+{/* NOMBRE */}
+<div
+  style={{
+    fontWeight: 600,
+    fontSize: 14,
+    lineHeight: "16px",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+  }}
+>
+  {p.name}
+</div>
+
+<div style={{ opacity: 0.7, marginTop: 4 }}>
+  ${p.price.toLocaleString("es-CO")}
+</div>
+
+
             </button>
           ))}
         </div>
@@ -449,6 +557,19 @@ export default function PosPage() {
       <div style={{ border: "1px solid #eee", borderRadius: 16, padding: 16 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <h2 style={{ margin: 0 }}>Carrito</h2>
+<button
+  onClick={() => router.push("/shift-sales")}
+  style={{
+    padding: "8px 12px",
+    borderRadius: 10,
+    cursor: "pointer",
+    border: "1px solid #ddd",
+    background: "white",
+    fontWeight: 700,
+  }}
+>
+  Historial turno
+</button>
 
           {shiftId && (
             <button
