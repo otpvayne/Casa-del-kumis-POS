@@ -36,21 +36,9 @@ export default function Home() {
   if (error) return <div style={{ padding: 24 }}>Error: {error}</div>;
 
   return (
-    <div style={{ padding: 24 }}>
-      <h1>Conexión OK ✅</h1>
-      <p>Sucursales encontradas: {branches.length}</p>
-
-      <ul>
-        {branches.map((b) => (
-          <li key={b.id}>
-            {b.name} — {b.is_active ? "Activa" : "Inactiva"}
-          </li>
-        ))}
-      </ul>
-
-      <p style={{ marginTop: 16, opacity: 0.7 }}>
-        Si ves esta lista sin errores, Next.js ya está conectado a Supabase.
-      </p>
-    </div>
+    <div className="p-6 bg-black text-white rounded-xl">
+  Tailwind OK ✅
+</div>
+    
   );
 }
