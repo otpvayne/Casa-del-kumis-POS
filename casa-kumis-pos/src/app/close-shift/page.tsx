@@ -21,6 +21,10 @@ export default function CloseShiftPage() {
   const [branchId, setBranchId] = useState<string | null>(null);
   const [shiftId, setShiftId] = useState<string | null>(null);
 
+  // ✅ NUEVO: nombre de sucursal y hora de apertura (para mostrarlo bien al usuario)
+  const [branchName, setBranchName] = useState<string>("");
+  const [shiftOpenedAt, setShiftOpenedAt] = useState<string | null>(null);
+
   const [totals, setTotals] = useState<Totals | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -34,6 +38,16 @@ export default function CloseShiftPage() {
     let cleaned = v.trim().replace(/\./g, "").replace(",", ".");
     const n = Number(cleaned);
     return Number.isNaN(n) ? 0 : n;
+  };
+
+  // ✅ NUEVO: formatear "Abierto 09:55 a. m."
+  const formatShiftOpenedAt = (openedAt: string | null) => {
+    if (!openedAt) return "Abierto -";
+    const t = new Date(openedAt).toLocaleTimeString("es-CO", {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+    return `Abierto ${t}`;
   };
 
   const refreshTotals = async (sid: string) => {
@@ -61,9 +75,19 @@ export default function CloseShiftPage() {
       if (!id) return router.replace("/select-branch");
       setBranchId(id);
 
+      // ✅ NUEVO: traer nombre de sucursal
+      const { data: branchRow } = await supabase
+        .from("branches")
+        .select("name")
+        .eq("id", id)
+        .maybeSingle();
+
+      setBranchName(branchRow?.name ?? "");
+
+      // ✅ MOD: traer opened_at para mostrar hora de apertura
       const { data: shift, error: shiftErr } = await supabase
         .from("shifts")
-        .select("id,status")
+        .select("id,status,opened_at")
         .eq("branch_id", id)
         .eq("status", "OPEN")
         .order("opened_at", { ascending: false })
@@ -72,6 +96,7 @@ export default function CloseShiftPage() {
 
       if (shiftErr || !shift) return router.replace("/open-shift");
       setShiftId(shift.id);
+      setShiftOpenedAt(shift.opened_at ?? null);
 
       await refreshTotals(shift.id);
 
@@ -126,8 +151,7 @@ export default function CloseShiftPage() {
   if (err) return <div className="container py-6 text-red-600">Error: {err}</div>;
   if (!totals) return <div className="container py-6">Sin datos de turno.</div>;
 
-  const diffLabel =
-    diffOk ? "Cuadra" : diff > 0 ? "Sobra" : "Falta";
+  const diffLabel = diffOk ? "Cuadra" : diff > 0 ? "Sobra" : "Falta";
 
   return (
     <div className="container py-6">
@@ -136,12 +160,15 @@ export default function CloseShiftPage() {
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0">
               <h1 className="text-2xl font-extrabold tracking-tight">Cierre de turno</h1>
+
+              {/* ✅ SOLO CAMBIÉ ESTA PARTE: ahora se ve como "Sucursal Centro • Abierto 09:55 a. m." */}
               <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-gray-600">
                 <span className="badge">
-                  Sucursal: <span className="ml-1 font-extrabold text-gray-900">{branchId}</span>
+                  {branchName || "Sucursal"}
                 </span>
+                <span className="text-gray-300">•</span>
                 <span className="badge">
-                  Turno: <span className="ml-1 font-extrabold text-gray-900">{shiftId}</span>
+                  {formatShiftOpenedAt(shiftOpenedAt)}
                 </span>
               </div>
             </div>
@@ -162,7 +189,8 @@ export default function CloseShiftPage() {
                     ${expected.toLocaleString("es-CO")}
                   </div>
                   <div className="mt-2 text-xs text-gray-500">
-                    Ventas registradas: <span className="font-bold text-gray-800">{totals.sales_count}</span>
+                    Ventas registradas:{" "}
+                    <span className="font-bold text-gray-800">{totals.sales_count}</span>
                   </div>
                 </div>
 
@@ -220,7 +248,9 @@ export default function CloseShiftPage() {
                   </div>
                   <div className="mt-1 flex items-center justify-between text-sm">
                     <span className="text-gray-600">Contado</span>
-                    <span className="font-extrabold text-gray-900">${toNum(confirmValue).toLocaleString("es-CO")}</span>
+                    <span className="font-extrabold text-gray-900">
+                      ${toNum(confirmValue).toLocaleString("es-CO")}
+                    </span>
                   </div>
                   <div className="mt-2 flex items-center justify-between text-sm">
                     <span className="text-gray-600">Diferencia</span>
@@ -245,11 +275,7 @@ export default function CloseShiftPage() {
                   Cancelar
                 </button>
 
-                <button
-                  className="btn btn-primary flex-1"
-                  onClick={closeShift}
-                  disabled={closing || !diffOk}
-                >
+                <button className="btn btn-primary flex-1" onClick={closeShift} disabled={closing || !diffOk}>
                   {closing ? "Cerrando..." : "Cerrar turno"}
                 </button>
               </div>
