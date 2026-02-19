@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { useRouter } from "next/navigation";
+import PageShell from "@/components/PageShell";
 
 type Totals = {
   shift_id: string;
@@ -39,6 +40,7 @@ export default function CloseShiftPage() {
     const { data, error } = await supabase.rpc("get_shift_totals", { p_shift_id: sid });
     if (error) throw new Error(error.message);
     const row = Array.isArray(data) ? data[0] : data;
+
     setTotals({
       shift_id: row.shift_id,
       expected_total: Number(row.expected_total ?? 0),
@@ -84,7 +86,7 @@ export default function CloseShiftPage() {
 
   const expected = useMemo(() => totals?.expected_total ?? 0, [totals]);
 
-  // ✅ NUEVO: diferencia en vivo (confirmado - esperado)
+  // diferencia = confirmado - esperado
   const diff = useMemo(() => {
     const v = toNum(confirmValue);
     return Math.round((v - expected) * 100) / 100;
@@ -99,7 +101,6 @@ export default function CloseShiftPage() {
     setClosing(true);
 
     try {
-      // refrescar antes de cerrar (por si hubo ventas recientes)
       await refreshTotals(shiftId);
 
       const value = toNum(confirmValue);
@@ -111,116 +112,166 @@ export default function CloseShiftPage() {
 
       if (error) throw new Error(error.message);
 
-      setOkMsg("Turno cerrado ✅");
+      setOkMsg("Turno cerrado correctamente.");
       setClosing(false);
 
-      // volver al POS (o a una pantalla de apertura si prefieres)
-      setTimeout(() => router.replace("/pos"), 800);
+      setTimeout(() => router.replace("/pos"), 700);
     } catch (e: any) {
       setClosing(false);
       setErr(e.message ?? "No se pudo cerrar.");
     }
   };
 
-  if (loading) return <div style={{ padding: 24 }}>Cargando cierre de turno...</div>;
-  if (err) return <div style={{ padding: 24, color: "red" }}>Error: {err}</div>;
-  if (!totals) return <div style={{ padding: 24 }}>Sin datos de turno.</div>;
+  if (loading) return <div className="container py-6">Cargando cierre de turno...</div>;
+  if (err) return <div className="container py-6 text-red-600">Error: {err}</div>;
+  if (!totals) return <div className="container py-6">Sin datos de turno.</div>;
+
+  const diffLabel =
+    diffOk ? "Cuadra" : diff > 0 ? "Sobra" : "Falta";
 
   return (
-    <div style={{ padding: 24, maxWidth: 520 }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <h1 style={{ margin: 0 }}>Cerrar turno</h1>
+    <div className="container py-6">
+      <PageShell
+        title={
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <h1 className="text-2xl font-extrabold tracking-tight">Cierre de turno</h1>
+              <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-gray-600">
+                <span className="badge">
+                  Sucursal: <span className="ml-1 font-extrabold text-gray-900">{branchId}</span>
+                </span>
+                <span className="badge">
+                  Turno: <span className="ml-1 font-extrabold text-gray-900">{shiftId}</span>
+                </span>
+              </div>
+            </div>
 
-        {/* ✅ NUEVO: volver sin cerrar */}
-        <button
-          onClick={() => router.push("/pos")}
-          disabled={closing}
-          style={{
-            padding: "10px 12px",
-            borderRadius: 12,
-            cursor: "pointer",
-            border: "1px solid #ddd",
-            background: "white",
-            fontWeight: 800,
-          }}
-        >
-          Volver al POS
-        </button>
-      </div>
-
-      <p style={{ opacity: 0.7 }}>Sucursal: {branchId}</p>
-      <p style={{ opacity: 0.7 }}>Turno: {shiftId}</p>
-
-      <div style={{ border: "1px solid #eee", borderRadius: 14, padding: 14, marginTop: 12 }}>
-        <h3>Total esperado según ventas</h3>
-        <div style={{ fontSize: 28, fontWeight: 800 }}>
-          ${expected.toLocaleString("es-CO")}
-        </div>
-        <div style={{ opacity: 0.7, marginTop: 6 }}>Ventas registradas: {totals.sales_count}</div>
-
-        <hr style={{ margin: "12px 0" }} />
-
-        <div style={{ display: "grid", gap: 6 }}>
-          <Row label="Efectivo" value={totals.cash_total} />
-          <Row label="Tarjeta" value={totals.card_total} />
-          <Row label="Transferencia" value={totals.transfer_total} />
-          <Row label="QR" value={totals.qr_total} />
-        </div>
-
-        <hr style={{ margin: "12px 0" }} />
-
-        <label style={{ display: "block" }}>
-          <div style={{ fontWeight: 700, marginBottom: 6 }}>
-            Confirma el total esperado (debe ser igual)
+            <button className="btn" onClick={() => router.push("/pos")} disabled={closing}>
+              Volver al POS
+            </button>
           </div>
-          <input
-            type="text"
-            inputMode="numeric"
-            pattern="[0-9.,]*"
-            value={confirmValue}
-            onChange={(e) => setConfirmValue(e.target.value)}
-            placeholder={`Ej: ${expected.toLocaleString("es-CO")}`}
-            disabled={closing}
-            style={{ width: "100%", padding: 10, borderRadius: 10, border: "1px solid #ddd" }}
-          />
-        </label>
+        }
+      >
+        <div className="mx-auto max-w-xl">
+          <div className="card">
+            <div className="card-h">
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="text-sm text-gray-500">Total esperado según ventas</div>
+                  <div className="mt-1 text-3xl font-extrabold tracking-tight">
+                    ${expected.toLocaleString("es-CO")}
+                  </div>
+                  <div className="mt-2 text-xs text-gray-500">
+                    Ventas registradas: <span className="font-bold text-gray-800">{totals.sales_count}</span>
+                  </div>
+                </div>
 
-        {/* ✅ NUEVO: diferencia en vivo (tipo Siigo) */}
-        <div style={{ marginTop: 10, opacity: 0.9 }}>
-          Diferencia:{" "}
-          <strong style={{ color: diffOk ? "green" : "red" }}>
-            {diff.toLocaleString("es-CO")}
-          </strong>
+                <div className="rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3">
+                  <div className="text-xs font-semibold text-gray-500">Diferencia</div>
+                  <div className={`mt-1 text-xl font-extrabold ${diffOk ? "text-emerald-600" : "text-red-600"}`}>
+                    {diff.toLocaleString("es-CO")}
+                  </div>
+                  <div className="mt-1 text-xs font-semibold text-gray-600">{diffLabel}</div>
+                </div>
+              </div>
+            </div>
+
+            <div className="card-b space-y-4">
+              {/* Desglose */}
+              <div className="rounded-2xl border border-gray-200 p-4">
+                <div className="mb-3 flex items-center justify-between">
+                  <div className="text-sm font-extrabold">Desglose por método</div>
+                  <span className="badge">Auto</span>
+                </div>
+
+                <div className="space-y-2">
+                  <Row label="Efectivo" value={totals.cash_total} />
+                  <Row label="Tarjeta" value={totals.card_total} />
+                  <Row label="Transferencia" value={totals.transfer_total} />
+                  <Row label="QR" value={totals.qr_total} />
+                </div>
+              </div>
+
+              {/* Confirmación */}
+              <div className="rounded-2xl border border-gray-200 p-4">
+                <div className="text-sm font-extrabold">Confirmación</div>
+                <div className="mt-1 text-xs text-gray-500">
+                  Ingresa el total contado. Debe ser igual al total esperado para permitir el cierre.
+                </div>
+
+                <div className="mt-3 grid gap-2">
+                  <label className="label">Total contado</label>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    pattern="[0-9.,]*"
+                    value={confirmValue}
+                    onChange={(e) => setConfirmValue(e.target.value)}
+                    placeholder={`Ej: ${expected.toLocaleString("es-CO")}`}
+                    disabled={closing}
+                    className="input"
+                  />
+                </div>
+
+                <div className="mt-3 rounded-2xl border border-gray-200 bg-gray-50 p-3">
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-gray-600">Esperado</span>
+                    <span className="font-extrabold text-gray-900">${expected.toLocaleString("es-CO")}</span>
+                  </div>
+                  <div className="mt-1 flex items-center justify-between text-sm">
+                    <span className="text-gray-600">Contado</span>
+                    <span className="font-extrabold text-gray-900">${toNum(confirmValue).toLocaleString("es-CO")}</span>
+                  </div>
+                  <div className="mt-2 flex items-center justify-between text-sm">
+                    <span className="text-gray-600">Diferencia</span>
+                    <span className={`font-extrabold ${diffOk ? "text-emerald-600" : "text-red-600"}`}>
+                      {diff.toLocaleString("es-CO")}
+                    </span>
+                  </div>
+                </div>
+
+                {!diffOk && (
+                  <div className="mt-3 alert-err">
+                    El valor contado no cuadra. Ajusta el total para poder cerrar el turno.
+                  </div>
+                )}
+              </div>
+
+              {okMsg && <div className="alert-ok">{okMsg}</div>}
+              {err && <div className="alert-err">{err}</div>}
+
+              <div className="flex gap-2">
+                <button className="btn flex-1" onClick={() => router.push("/pos")} disabled={closing}>
+                  Cancelar
+                </button>
+
+                <button
+                  className="btn btn-primary flex-1"
+                  onClick={closeShift}
+                  disabled={closing || !diffOk}
+                >
+                  {closing ? "Cerrando..." : "Cerrar turno"}
+                </button>
+              </div>
+
+              <div className="text-xs text-gray-500">
+                Recomendación: si la diferencia no cuadra, revisa ventas recientes y el arqueo físico antes de cerrar.
+              </div>
+            </div>
+          </div>
         </div>
-
-        {okMsg && <div style={{ marginTop: 10, color: "green" }}>{okMsg}</div>}
-        {err && <div style={{ marginTop: 10, color: "red" }}>{err}</div>}
-
-        <button
-          onClick={closeShift}
-          disabled={closing || !diffOk}
-          style={{
-            width: "100%",
-            padding: 12,
-            marginTop: 12,
-            borderRadius: 12,
-            cursor: closing || !diffOk ? "not-allowed" : "pointer",
-            fontWeight: 800,
-            opacity: closing || !diffOk ? 0.6 : 1,
-          }}
-        >
-          {closing ? "Cerrando..." : !diffOk ? "El valor no cuadra" : "Cerrar turno"}
-        </button>
-      </div>
+      </PageShell>
     </div>
   );
 }
 
 function Row({ label, value }: { label: string; value: number }) {
   return (
-    <div style={{ display: "flex", justifyContent: "space-between" }}>
-      <span>{label}</span>
-      <strong>${Number(value ?? 0).toLocaleString("es-CO")}</strong>
+    <div className="flex items-center justify-between">
+      <span className="text-sm text-gray-700">{label}</span>
+      <span className="text-sm font-extrabold text-gray-900">
+        ${Number(value ?? 0).toLocaleString("es-CO")}
+      </span>
     </div>
   );
 }

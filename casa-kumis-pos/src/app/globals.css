@@ -1,36 +1,202 @@
 @import "tailwindcss";
 
-/* ✅ tu mini “design system” */
-@layer components {
-  .card {
-    @apply rounded-2xl border border-gray-200 bg-white p-4 shadow-sm;
+/* Base */
+:root {
+  --bg: 248 250 252; /* slate-50 */
+  --card: 255 255 255;
+  --text: 15 23 42; /* slate-900 */
+  --muted: 100 116 139; /* slate-500 */
+  --border: 226 232 240; /* slate-200 */
+  --ring: 0 0 0; /* black */
+  --ok: 16 185 129; /* emerald-500 */
+  --err: 239 68 68; /* red-500 */
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  @apply text-slate-900;
+  background: rgb(var(--bg));
+}
+
+/* Container (sin sm: en @apply) */
+.container {
+  @apply mx-auto w-full max-w-7xl px-4;
+}
+
+/* ✅ responsive sin usar sm: en @apply */
+@media (min-width: 640px) {
+  .container {
+    padding-left: 1.5rem; /* 24px */
+    padding-right: 1.5rem;
+  }
+}
+
+/* ===== Component primitives ===== */
+.card {
+  @apply rounded-2xl border bg-white shadow-sm;
+  border-color: rgb(var(--border));
+}
+
+.card-h {
+  @apply px-4 py-3 border-b;
+  border-color: rgb(var(--border));
+}
+
+.card-b {
+  @apply px-4 py-4;
+}
+
+.badge {
+  @apply inline-flex items-center rounded-full border px-2 py-1 text-xs font-semibold;
+  border-color: rgb(var(--border));
+  color: rgb(var(--muted));
+  background: white;
+}
+
+.label {
+  @apply text-xs font-bold text-slate-700;
+}
+
+.input {
+  @apply w-full rounded-xl border px-3 py-2 text-sm outline-none;
+  border-color: rgb(var(--border));
+  background: white;
+}
+.input:focus {
+  box-shadow: 0 0 0 4px rgba(var(--ring), 0.08);
+  border-color: rgba(var(--ring), 0.25);
+}
+
+/* Buttons */
+.btn {
+  @apply inline-flex items-center justify-center gap-2 rounded-xl border px-4 py-2 text-sm font-extrabold transition;
+  border-color: rgb(var(--border));
+  background: white;
+}
+.btn:hover {
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.08);
+}
+.btn:active {
+  transform: scale(0.99);
+}
+.btn:disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.btn-primary {
+  border-color: rgba(var(--ring), 0.25);
+  background: rgb(15, 23, 42); /* slate-900 */
+  color: white;
+}
+.btn-primary:hover {
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.18);
+}
+
+.btn-ghost {
+  background: transparent;
+}
+
+/* Alerts */
+.alert-ok {
+  @apply rounded-2xl border px-3 py-2 text-sm font-semibold;
+  border-color: rgba(var(--ok), 0.25);
+  background: rgba(var(--ok), 0.08);
+  color: rgb(5, 150, 105);
+}
+
+.alert-err {
+  @apply rounded-2xl border px-3 py-2 text-sm font-semibold;
+  border-color: rgba(var(--err), 0.25);
+  background: rgba(var(--err), 0.08);
+  color: rgb(220, 38, 38);
+}
+
+/* Utilidad para truncar con 2 líneas (si no tienes line-clamp plugin) */
+.line-clamp-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* ===== PRINT TICKET ===== */
+.print-layer {
+  /* capa que se vuelve visible en print */
+}
+
+/* Estilos ticket (los mismos que ya tienes en page.tsx global style)
+   OJO: Esto lo dejas igual, pero si quieres, lo puedes centralizar aquí también.
+*/
+@page {
+  size: 80mm auto;
+  margin: 2mm;
+}
+
+@media print {
+  body * {
+    visibility: hidden !important;
   }
 
-  .btn {
-    @apply inline-flex items-center justify-center rounded-xl px-4 py-2 font-semibold border border-gray-200 bg-white hover:bg-gray-50 transition;
+  .print-layer,
+  .print-layer * {
+    visibility: visible !important;
   }
 
-  .btn-primary {
-    @apply bg-black text-white border-black hover:bg-gray-800;
+  .print-layer {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 80mm;
+    padding: 0;
+    margin: 0;
+    background: #fff;
   }
+}
 
-  .input {
-    @apply w-full rounded-xl border border-gray-300 px-3 py-2 outline-none focus:ring-2 focus:ring-black/20;
-  }
-
-  .label {
-    @apply text-sm font-semibold text-gray-700;
-  }
-
-  .table {
-    @apply w-full border-collapse;
-  }
-
-  .th {
-    @apply text-left text-xs font-semibold text-gray-500 border-b border-gray-200 px-3 py-3 bg-gray-50;
-  }
-
-  .td {
-    @apply text-sm text-gray-800 border-b border-gray-100 px-3 py-3;
-  }
+/* Ticket helpers (si decides usar clases globales) */
+.ticket {
+  font-family: Arial, sans-serif;
+  font-size: 11px;
+  width: 76mm;
+  line-height: 1.2;
+}
+.ticket .center {
+  text-align: center;
+}
+.ticket .bold {
+  font-weight: 700;
+}
+.ticket .line {
+  border-top: 1px dashed #000;
+  margin: 6px 0;
+}
+.ticket .row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 2px 0;
+}
+.ticket .left {
+  flex: 1;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.ticket .right {
+  min-width: 62px;
+  text-align: right;
+  white-space: nowrap;
+}
+.ticket .muted {
+  opacity: 0.75;
+  font-size: 10px;
+  margin-top: 1px;
+}
+.ticket .item {
+  margin-bottom: 4px;
 }

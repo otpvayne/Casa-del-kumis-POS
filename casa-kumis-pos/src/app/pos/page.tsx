@@ -3,16 +3,16 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { useRouter } from "next/navigation";
+import PageShell from "@/components/PageShell";
 
 type PosProduct = {
   branch_product_id: string;
   product_id: string;
   name: string;
-  image_url?: string | null;
   price: number;
   is_favorite: boolean;
+  image_url?: string | null;
 };
-
 
 type CartItem = {
   branch_product_id: string;
@@ -20,6 +20,7 @@ type CartItem = {
   name: string;
   unit_price: number;
   qty: number;
+  image_url?: string | null;
 };
 
 type PaymentMethod = "CASH" | "CARD" | "TRANSFER" | "QR";
@@ -28,6 +29,10 @@ export default function PosPage() {
   const router = useRouter();
   const [branchId, setBranchId] = useState<string | null>(null);
   const [shiftId, setShiftId] = useState<string | null>(null);
+
+  // ✅ para UI humana
+  const [branchName, setBranchName] = useState<string>("-");
+  const [shiftOpenedAt, setShiftOpenedAt] = useState<string | null>(null);
 
   const [products, setProducts] = useState<PosProduct[]>([]);
   const [taxRate, setTaxRate] = useState<number>(0.08);
@@ -45,15 +50,7 @@ export default function PosPage() {
   const [qr, setQr] = useState<string>("0");
   const [savingSale, setSavingSale] = useState(false);
   const [saleOkMsg, setSaleOkMsg] = useState<string | null>(null);
-  const [lastSaleId, setLastSaleId] = useState<string | null>(null);
   const [printingSaleId, setPrintingSaleId] = useState<string | null>(null);
-
-  // ✅ NUEVO: Cliente opcional
-  const [registerCustomer, setRegisterCustomer] = useState(false);
-  const [custIdentification, setCustIdentification] = useState<string>("");
-  const [custName, setCustName] = useState<string>("");
-  const [custPhone, setCustPhone] = useState<string>("");
-  const [custEmail, setCustEmail] = useState<string>("");
 
   useEffect(() => {
     const run = async () => {
@@ -72,9 +69,19 @@ export default function PosPage() {
 
       setBranchId(id);
 
+      // ✅ traer nombre de sucursal
+      const { data: bRow } = await supabase
+        .from("branches")
+        .select("name")
+        .eq("id", id)
+        .maybeSingle();
+
+      if (bRow?.name) setBranchName(String(bRow.name));
+
+      // ✅ turno abierto
       const { data: shift, error: shiftErr } = await supabase
         .from("shifts")
-        .select("id,status")
+        .select("id,status,opened_at")
         .eq("branch_id", id)
         .eq("status", "OPEN")
         .order("opened_at", { ascending: false })
@@ -83,6 +90,7 @@ export default function PosPage() {
 
       if (shiftErr || !shift) return router.replace("/open-shift");
       setShiftId(shift.id);
+      setShiftOpenedAt(shift.opened_at ? String(shift.opened_at) : null);
 
       const { data: settingsRow } = await supabase
         .from("settings")
@@ -92,6 +100,7 @@ export default function PosPage() {
 
       if (settingsRow?.tax_rate != null) setTaxRate(Number(settingsRow.tax_rate));
 
+      // ✅ productos + imagen
       const { data: rows, error: prodErr } = await supabase
         .from("branch_products")
         .select("id, product_id, price, is_favorite, products(name,image_url)")
@@ -106,14 +115,14 @@ export default function PosPage() {
       }
 
       const mapped: PosProduct[] =
-  (rows ?? []).map((r: any) => ({
-    branch_product_id: r.id,
-    product_id: r.product_id,
-    name: r.products?.name ?? "Producto",
-    image_url: r.products?.image_url ?? null,
-    price: Number(r.price ?? 0),
-    is_favorite: Boolean(r.is_favorite),
-  })) ?? [];
+        (rows ?? []).map((r: any) => ({
+          branch_product_id: r.id,
+          product_id: r.product_id,
+          name: r.products?.name ?? "Producto",
+          price: Number(r.price ?? 0),
+          is_favorite: Boolean(r.is_favorite),
+          image_url: r.products?.image_url ?? null,
+        })) ?? [];
 
       setProducts(mapped);
       setLoading(false);
@@ -136,6 +145,7 @@ export default function PosPage() {
             name: p.name,
             unit_price: p.price,
             qty: 1,
+            image_url: p.image_url ?? null,
           },
         ];
       }
@@ -188,11 +198,7 @@ export default function PosPage() {
   // --- Cobro helpers
   const toNum = (v: string) => {
     if (!v) return 0;
-
-    let cleaned = v.trim();
-    cleaned = cleaned.replace(/\./g, "");
-    cleaned = cleaned.replace(",", ".");
-
+    let cleaned = v.trim().replace(/\./g, "").replace(",", ".");
     const n = Number(cleaned);
     return Number.isNaN(n) ? 0 : n;
   };
@@ -204,23 +210,22 @@ export default function PosPage() {
   const openPayModal = () => {
     setPayError(null);
     setSaleOkMsg(null);
-
     setCash("0");
     setCard("0");
     setTransfer("0");
     setQr("0");
-
-    // ✅ reset cliente
-    setRegisterCustomer(false);
-    setCustIdentification("");
-    setCustName("");
-    setCustPhone("");
-    setCustEmail("");
-
     setShowPay(true);
   };
 
   const closePayModal = () => setShowPay(false);
+
+  const formatShift = (iso: string | null) => {
+    if (!iso) return "Turno activo";
+    const d = new Date(iso);
+    // hora bonita
+    return `Turno: ${d.toLocaleTimeString("es-CO", { hour: "2-digit", minute: "2-digit" })}`;
+    // si quieres fecha también: + ` (${d.toLocaleDateString("es-CO")})`
+  };
 
   const saveSale = async () => {
     if (!branchId || !shiftId) return;
@@ -228,7 +233,6 @@ export default function PosPage() {
     setPayError(null);
     setSavingSale(true);
 
-    // Validación carrito
     if (cart.length === 0) {
       setSavingSale(false);
       setPayError("El carrito está vacío.");
@@ -242,7 +246,6 @@ export default function PosPage() {
       return;
     }
 
-    // Construir pagos (solo los > 0)
     const payRows: { method: PaymentMethod; amount: number }[] = [];
     const c = toNum(cash);
     const ca = toNum(card);
@@ -260,33 +263,6 @@ export default function PosPage() {
       return;
     }
 
-    // ✅ NUEVO: customer_id opcional
-    let customerId: string | null = null;
-
-    if (registerCustomer) {
-      if (!custIdentification.trim() || !custName.trim()) {
-        setSavingSale(false);
-        setPayError("Para registrar cliente debes ingresar Identificación y Nombre.");
-        return;
-      }
-
-      const { data: custId, error: custErr } = await supabase.rpc("upsert_customer", {
-        p_identification: custIdentification.trim(),
-        p_name: custName.trim(),
-        p_phone: custPhone.trim() || null,
-        p_email: custEmail.trim() || null,
-      });
-
-      if (custErr || !custId) {
-        setSavingSale(false);
-        setPayError(custErr?.message ?? "Error creando cliente.");
-        return;
-      }
-
-      customerId = String(custId);
-    }
-
-    // 1) Insert sale
     const { data: saleRow, error: saleErr } = await supabase
       .from("sales")
       .insert({
@@ -295,7 +271,6 @@ export default function PosPage() {
         subtotal,
         tax_total: taxTotal,
         total,
-        customer_id: customerId, // ✅ NUEVO
       })
       .select("id,total")
       .single();
@@ -308,7 +283,6 @@ export default function PosPage() {
 
     const saleId = saleRow.id as string;
 
-    // 2) Insert sale_items
     const itemsToInsert = cart.map((it) => ({
       sale_id: saleId,
       product_id: it.product_id,
@@ -324,7 +298,6 @@ export default function PosPage() {
       return;
     }
 
-    // 3) Insert payments
     const paymentsToInsert = payRows.map((p) => ({
       sale_id: saleId,
       method: p.method,
@@ -338,7 +311,6 @@ export default function PosPage() {
       return;
     }
 
-    // 4) Update shift expected_total += total
     const { data: shiftRow, error: shGetErr } = await supabase
       .from("shifts")
       .select("expected_total")
@@ -365,468 +337,309 @@ export default function PosPage() {
       return;
     }
 
-    // OK
     setSavingSale(false);
     setShowPay(false);
     setCart([]);
-    setSaleOkMsg(`Venta guardada ✅ (ID: ${saleId})`);
-    setLastSaleId(saleId);
+    setSaleOkMsg(`Venta guardada ✅ (Comprobante: ${String(saleId).slice(0, 8).toUpperCase()})`);
     setPrintingSaleId(saleId);
     sessionStorage.removeItem(`cart_${branchId}`);
   };
 
-  if (loading) return <div style={{ padding: 24 }}>Cargando POS...</div>;
-  if (pageError) return <div style={{ padding: 24, color: "red" }}>Error: {pageError}</div>;
+  if (loading) return <div className="container py-6">Cargando POS...</div>;
+  if (pageError) return <div className="container py-6 text-red-600">Error: {pageError}</div>;
 
   return (
-    <div style={{ padding: 24, display: "grid", gridTemplateColumns: "2fr 1fr", gap: 16 }}>
-      {/* IZQUIERDA */}
-      <div>
-        <h1>POS</h1>
-        <p style={{ opacity: 0.7 }}>Sucursal: {branchId}</p>
-        <p style={{ opacity: 0.7 }}>Turno: {shiftId}</p>
-        <p style={{ opacity: 0.7 }}>Impuesto: {(taxRate * 100).toFixed(2)}%</p>
-
-        <h2 style={{ marginTop: 16 }}>Favoritos</h2>
-        <div
-          style={{
-            opacity: savingSale ? 0.5 : 1,
-            pointerEvents: savingSale ? "none" : "auto",
-            display: "grid",
-            gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
-            gap: 12,
-          }}
-        >
-          {favorite.map((p) => (
-            <button
-              key={p.branch_product_id}
-              disabled={savingSale}
-              onClick={() => addToCart(p)}
-              style={{
-  padding: 12,
-  borderRadius: 14,
-  border: "1px solid #ddd",
-  cursor: "pointer",
-  fontSize: 14,
-  textAlign: "left",
-  display: "flex",
-  flexDirection: "column",
-  height: 190, // 🔥 altura fija para todos
-}}
-            >
-              {/* IMAGEN */}
-<div
-  style={{
-    width: "100%",
-    height: 110, // 🔥 altura fija
-    borderRadius: 12,
-    overflow: "hidden",
-    marginBottom: 8,
-    background: "#f5f5f5",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-  }}
->
-  {p.image_url ? (
-    <img
-  src={p.image_url}
-  alt={p.name}
-  style={{
-    width: "100%",
-    height: "100%",
-    objectFit: "contain",      // ✅ NO recorta, muestra completa
-    objectPosition: "center",  // ✅ centrada
-  }}
-/>
-
-  ) : (
-    <span style={{ fontSize: 12, opacity: 0.5 }}>Sin imagen</span>
-  )}
-</div>
-
-
-{/* NOMBRE */}
-<div
-  style={{
-    fontWeight: 600,
-    fontSize: 14,
-    lineHeight: "16px",
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-    whiteSpace: "nowrap",
-  }}
->
-  {p.name}
-</div>
-
-<div style={{ opacity: 0.7, marginTop: 4 }}>
-  ${p.price.toLocaleString("es-CO")}
-</div>
-
-            </button>
-          ))}
-        </div>
-
-        <h2 style={{ marginTop: 16 }}>Todos</h2>
-        <div
-          style={{
-            opacity: savingSale ? 0.5 : 1,
-            pointerEvents: savingSale ? "none" : "auto",
-            display: "grid",
-            gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
-            gap: 12,
-          }}
-        >
-          {others.map((p) => (
-            <button
-              key={p.branch_product_id}
-              disabled={savingSale}
-              onClick={() => addToCart(p)}
-              style={{
-  padding: 12,
-  borderRadius: 14,
-  border: "1px solid #ddd",
-  cursor: "pointer",
-  fontSize: 14,
-  textAlign: "left",
-  display: "flex",
-  flexDirection: "column",
-  height: 190, // 🔥 altura fija para todos
-}}
-
-            >
-              {/* IMAGEN */}
-<div
-  style={{
-    width: "100%",
-    height: 110, // 🔥 altura fija
-    borderRadius: 12,
-    overflow: "hidden",
-    marginBottom: 8,
-    background: "#f5f5f5",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-  }}
->
-  {p.image_url ? (
-    <img
-  src={p.image_url}
-  alt={p.name}
-  style={{
-    width: "100%",
-    height: "100%",
-    objectFit: "contain",      // ✅ NO recorta, muestra completa
-    objectPosition: "center",  // ✅ centrada
-  }}
-/>
-
-  ) : (
-    <span style={{ fontSize: 12, opacity: 0.5 }}>Sin imagen</span>
-  )}
-</div>
-
-
-
-{/* NOMBRE */}
-<div
-  style={{
-    fontWeight: 600,
-    fontSize: 14,
-    lineHeight: "16px",
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-    whiteSpace: "nowrap",
-  }}
->
-  {p.name}
-</div>
-
-<div style={{ opacity: 0.7, marginTop: 4 }}>
-  ${p.price.toLocaleString("es-CO")}
-</div>
-
-
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* DERECHA */}
-      <div style={{ border: "1px solid #eee", borderRadius: 16, padding: 16 }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <h2 style={{ margin: 0 }}>Carrito</h2>
-<button
-  onClick={() => router.push("/shift-sales")}
-  style={{
-    padding: "8px 12px",
-    borderRadius: 10,
-    cursor: "pointer",
-    border: "1px solid #ddd",
-    background: "white",
-    fontWeight: 700,
-  }}
->
-  Historial turno
-</button>
-
-          {shiftId && (
-            <button
-              onClick={() => {
-                if (cart.length > 0) {
-                  alert("No puedes cerrar turno con productos en el carrito. Finaliza la venta o vacía el carrito.");
-                  return;
-                }
-                router.push("/close-shift");
-              }}
-              style={{
-                padding: "8px 12px",
-                borderRadius: 10,
-                cursor: "pointer",
-                border: "1px solid #ddd",
-                background: "white",
-                fontWeight: 700,
-              }}
-            >
-              Cerrar turno
-            </button>
-          )}
-        </div>
-
-        {saleOkMsg && (
-          <div style={{ background: "#eaffea", padding: 10, borderRadius: 10, marginTop: 10 }}>{saleOkMsg}</div>
-        )}
-
-        {cart.length === 0 ? (
-          <p style={{ opacity: 0.7 }}>Toca un producto para agregarlo.</p>
-        ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 12, marginTop: 12 }}>
-            {cart.map((it) => (
-              <div
-                key={it.branch_product_id}
-                style={{
-                  border: "1px solid #eee",
-                  borderRadius: 12,
-                  padding: 12,
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: 8,
-                }}
-              >
-                <div style={{ fontWeight: 700 }}>{it.name}</div>
-                <div style={{ opacity: 0.7 }}>Unit: ${it.unit_price.toLocaleString("es-CO")}</div>
-
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <button disabled={savingSale} onClick={() => decQty(it.branch_product_id)} style={{ padding: "6px 10px" }}>
-                    –
-                  </button>
-                  <div style={{ minWidth: 24, textAlign: "center" }}>{it.qty}</div>
-                  <button disabled={savingSale} onClick={() => incQty(it.branch_product_id)} style={{ padding: "6px 10px" }}>
-                    +
-                  </button>
-
-                  <button
-                    disabled={savingSale}
-                    onClick={() => removeItem(it.branch_product_id)}
-                    style={{ marginLeft: "auto", padding: "6px 10px" }}
-                  >
-                    Quitar
-                  </button>
-                </div>
-
-                <div style={{ fontWeight: 700 }}>Línea: ${(it.unit_price * it.qty).toLocaleString("es-CO")}</div>
-              </div>
-            ))}
+  <div className="mx-auto w-full max-w-[1400px] px-6 py-6 lg:px-10">
+    <PageShell
+      title={
+        <div className="flex items-center justify-between gap-4">
+          <div className="min-w-0">
+            <div className="text-xs font-semibold uppercase tracking-wider text-gray-500">
+              Operación
+            </div>
+            <div className="mt-1 text-3xl font-black tracking-tight text-gray-900">
+              Punto de venta
+            </div>
           </div>
-        )}
 
-        <hr style={{ margin: "16px 0" }} />
-
-        <div style={{ display: "flex", justifyContent: "space-between" }}>
-          <span>Subtotal</span>
-          <strong>${subtotal.toLocaleString("es-CO")}</strong>
+          {/* Estado visual sutil (sin emojis) */}
+          <div className="hidden sm:flex items-center gap-2 rounded-full border border-gray-200 bg-white px-3 py-2 shadow-sm">
+            <span className="h-2 w-2 rounded-full bg-emerald-500" />
+            <span className="text-xs font-semibold text-gray-700">Activo</span>
+          </div>
         </div>
-        <div style={{ display: "flex", justifyContent: "space-between", marginTop: 6 }}>
-          <span>Impuesto</span>
-          <strong>${taxTotal.toLocaleString("es-CO")}</strong>
+      }
+      subtitle={
+        <div className="mt-4 rounded-2xl border border-gray-200 bg-white/70 px-4 py-3 shadow-sm">
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+            <span className="inline-flex items-center rounded-full border border-gray-200 bg-gray-50 px-3 py-1 font-semibold text-gray-700">
+              Sucursal: <span className="ml-1 font-extrabold">{branchName}</span>
+            </span>
+
+            <span className="text-gray-300">•</span>
+
+            <span className="inline-flex items-center rounded-full border border-blue-200 bg-blue-50 px-3 py-1 font-semibold text-blue-700">
+              Turno: <span className="ml-1 font-extrabold">{formatShift(shiftOpenedAt)}</span>
+            </span>
+
+            <span className="text-gray-300">•</span>
+
+            <span className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 font-semibold text-emerald-700">
+              Impuesto: <span className="ml-1 font-extrabold">{(taxRate * 100).toFixed(2)}%</span>
+            </span>
+          </div>
         </div>
-        <div style={{ display: "flex", justifyContent: "space-between", marginTop: 6, fontSize: 18 }}>
-          <span>Total</span>
-          <strong>${total.toLocaleString("es-CO")}</strong>
+      }
+    >
+      <div className="grid gap-4 lg:grid-cols-[2fr_1fr]">
+        {/* IZQUIERDA */}
+        <div className={savingSale ? "opacity-60 pointer-events-none" : ""}>
+          <Section title="Favoritos" />
+          <ProductsGrid products={favorite} onClick={addToCart} disabled={savingSale} />
+
+          <div className="h-5" />
+
+          <Section title="Todos" />
+          <ProductsGrid products={others} onClick={addToCart} disabled={savingSale} />
         </div>
 
-        <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
-          <button disabled={cart.length === 0 || savingSale} onClick={clearCart} style={{ padding: 10, borderRadius: 10, cursor: "pointer" }}>
-            Vaciar
-          </button>
+        {/* DERECHA */}
+        <div className="card h-fit">
+          <div className="card-h flex items-center justify-between">
+            <div>
+              <div className="text-lg font-extrabold">Carrito</div>
+              <div className="text-xs text-gray-500">{cart.length ? `${cart.length} ítem(s)` : "Vacío"}</div>
+            </div>
 
-          <button
-            onClick={openPayModal}
-            disabled={cart.length === 0 || savingSale}
-            style={{ padding: 10, borderRadius: 10, cursor: "pointer", flex: 1 }}
-          >
-            Cobrar
-          </button>
-        </div>
-      </div>
+            {shiftId && (
+              <button
+                className="btn"
+                onClick={() => {
+                  if (cart.length > 0) {
+                    alert("No puedes cerrar turno con productos en el carrito. Finaliza la venta o vacía el carrito.");
+                    return;
+                  }
+                  router.push("/close-shift");
+                }}
+                disabled={savingSale}
+              >
+                Cerrar turno
+              </button>
+            )}
+          </div>
 
-      {/* MODAL PAGO */}
-      {showPay && (
-        <div
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(0,0,0,0.4)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            padding: 16,
-            zIndex: 50,
-          }}
-        >
-          <div style={{ width: 460, background: "white", borderRadius: 16, padding: 16 }}>
-            <h2>Cobrar</h2>
-            <p style={{ opacity: 0.7 }}>Total a pagar: ${total.toLocaleString("es-CO")}</p>
+          <div className="card-b">
+            {saleOkMsg && <div className="alert-ok mb-4">{saleOkMsg}</div>}
 
-            <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 12 }}>
-              <label>
-                Efectivo
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  pattern="[0-9.,]*"
-                  value={cash}
-                  disabled={savingSale}
-                  onChange={(e) => setCash(e.target.value)}
-                  style={{ width: "80%", padding: 8 }}
-                />
-              </label>
+            {cart.length === 0 ? (
+              <p className="text-sm text-gray-500">Toca un producto para agregarlo.</p>
+            ) : (
+              <div className="space-y-3">
+                {cart.map((it) => (
+                  <div key={it.branch_product_id} className="rounded-2xl border border-gray-200 p-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="h-12 w-12 rounded-2xl border border-gray-200 bg-gray-50 overflow-hidden flex items-center justify-center">
+                          {it.image_url ? (
+                            <img src={it.image_url} alt={it.name} className="w-full h-full object-contain" />
+                          ) : (
+                            <div className="text-[10px] text-gray-400 font-bold">IMG</div>
+                          )}
+                        </div>
 
-              <label>
-                Tarjeta
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  pattern="[0-9.,]*"
-                  value={card}
-                  disabled={savingSale}
-                  onChange={(e) => setCard(e.target.value)}
-                  style={{ width: "80%", padding: 8 }}
-                />
-              </label>
+                        <div className="min-w-0">
+                          <div className="font-extrabold truncate">{it.name}</div>
+                          <div className="text-xs text-gray-500">Unit: ${it.unit_price.toLocaleString("es-CO")}</div>
+                        </div>
+                      </div>
 
-              <label>
-                Transferencia
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  pattern="[0-9.,]*"
-                  value={transfer}
-                  disabled={savingSale}
-                  onChange={(e) => setTransfer(e.target.value)}
-                  style={{ width: "80%", padding: 8 }}
-                />
-              </label>
+                      <div className="text-sm font-extrabold">
+                        ${(it.unit_price * it.qty).toLocaleString("es-CO")}
+                      </div>
+                    </div>
 
-              <label>
-                QR
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  pattern="[0-9.,]*"
-                  value={qr}
-                  disabled={savingSale}
-                  onChange={(e) => setQr(e.target.value)}
-                  style={{ width: "80%", padding: 8 }}
-                />
-              </label>
+                    <div className="mt-3 flex items-center gap-2">
+                      <button className="btn px-3 py-1" disabled={savingSale} onClick={() => decQty(it.branch_product_id)}>
+                        –
+                      </button>
+                      <div className="w-10 text-center font-bold">{it.qty}</div>
+                      <button className="btn px-3 py-1" disabled={savingSale} onClick={() => incQty(it.branch_product_id)}>
+                        +
+                      </button>
 
-              <div style={{ marginTop: 6 }}>
-                <strong>Pagos:</strong> ${paymentsSum.toLocaleString("es-CO")}
-              </div>
-
-              {/* ✅ NUEVO: Cliente opcional */}
-              <div style={{ border: "1px solid #eee", borderRadius: 12, padding: 12, marginTop: 6 }}>
-                <label style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                  <input
-                    type="checkbox"
-                    checked={registerCustomer}
-                    disabled={savingSale}
-                    onChange={(e) => setRegisterCustomer(e.target.checked)}
-                  />
-                  <strong>Registrar cliente</strong>
-                </label>
-
-                {!registerCustomer && (
-                  <div style={{ marginTop: 6, opacity: 0.75 }}>
-                    Cliente: <strong>CONSUMIDOR FINAL</strong>
+                      <button
+                        className="btn btn-ghost ml-auto px-3 py-1"
+                        disabled={savingSale}
+                        onClick={() => removeItem(it.branch_product_id)}
+                      >
+                        Quitar
+                      </button>
+                    </div>
                   </div>
-                )}
-
-                {registerCustomer && (
-                  <div style={{ display: "grid", gap: 8, marginTop: 10 }}>
-                    <input
-                      value={custIdentification}
-                      disabled={savingSale}
-                      onChange={(e) => setCustIdentification(e.target.value)}
-                      placeholder="Identificación (cédula/NIT)"
-                      style={{ width: "100%", padding: 10, borderRadius: 10, border: "1px solid #ddd" }}
-                    />
-                    <input
-                      value={custName}
-                      disabled={savingSale}
-                      onChange={(e) => setCustName(e.target.value)}
-                      placeholder="Nombre / Razón social"
-                      style={{ width: "100%", padding: 10, borderRadius: 10, border: "1px solid #ddd" }}
-                    />
-                    <input
-                      value={custPhone}
-                      disabled={savingSale}
-                      onChange={(e) => setCustPhone(e.target.value)}
-                      placeholder="Teléfono (opcional)"
-                      style={{ width: "100%", padding: 10, borderRadius: 10, border: "1px solid #ddd" }}
-                    />
-                    <input
-                      value={custEmail}
-                      disabled={savingSale}
-                      onChange={(e) => setCustEmail(e.target.value)}
-                      placeholder="Email (opcional)"
-                      style={{ width: "100%", padding: 10, borderRadius: 10, border: "1px solid #ddd" }}
-                    />
-                  </div>
-                )}
+                ))}
               </div>
+            )}
 
-              {payError && <div style={{ color: "red" }}>{payError}</div>}
+            <div className="my-4 border-t border-gray-200" />
 
-              <div style={{ display: "flex", gap: 10, marginTop: 10 }}>
-                <button onClick={closePayModal} disabled={savingSale} style={{ padding: 10, borderRadius: 10 }}>
-                  Cancelar
-                </button>
+            <TotalsRow label="Subtotal" value={subtotal} />
+            <TotalsRow label="Impuesto" value={taxTotal} />
+            <TotalsRow label="Total" value={total} bold />
 
-                <button onClick={saveSale} disabled={savingSale} style={{ padding: 10, borderRadius: 10, flex: 1 }}>
-                  {savingSale ? "Guardando..." : "Confirmar pago"}
-                </button>
-              </div>
+            <div className="mt-4 flex gap-2">
+              <button className="btn w-32" disabled={cart.length === 0 || savingSale} onClick={clearCart}>
+                Vaciar
+              </button>
+              <button className="btn btn-primary flex-1" disabled={cart.length === 0 || savingSale} onClick={openPayModal}>
+                Cobrar
+              </button>
             </div>
           </div>
         </div>
-      )}
 
-      {printingSaleId && (
-        <div className="print-layer">
-          <TicketInline
-            saleId={printingSaleId}
-            onPrinted={() => {
-              setPrintingSaleId(null);
-            }}
-          />
-        </div>
-      )}
+        {/* MODAL PAGO */}
+        {showPay && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40">
+            <div className="card w-full max-w-md">
+              <div className="card-h flex items-center justify-between">
+                <div>
+                  <div className="text-lg font-extrabold">Cobrar</div>
+                  <div className="text-sm text-gray-500">
+                    Total a pagar: <span className="font-bold">${total.toLocaleString("es-CO")}</span>
+                  </div>
+                </div>
+                <button className="btn" onClick={closePayModal} disabled={savingSale}>
+                  ✕
+                </button>
+              </div>
+
+              <div className="card-b space-y-3">
+                <PayInput label="Efectivo" value={cash} setValue={setCash} disabled={savingSale} />
+                <PayInput label="Tarjeta" value={card} setValue={setCard} disabled={savingSale} />
+                <PayInput label="Transferencia" value={transfer} setValue={setTransfer} disabled={savingSale} />
+                <PayInput label="QR" value={qr} setValue={setQr} disabled={savingSale} />
+
+                <div className="text-sm">
+                  <span className="font-bold">Pagos:</span> ${paymentsSum.toLocaleString("es-CO")}
+                </div>
+
+                {payError && <div className="alert-err">{payError}</div>}
+
+                <div className="flex gap-2 pt-2">
+                  <button className="btn flex-1" onClick={closePayModal} disabled={savingSale}>
+                    Cancelar
+                  </button>
+                  <button className="btn btn-primary flex-1" onClick={saveSale} disabled={savingSale}>
+                    {savingSale ? "Guardando..." : "Confirmar pago"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* PRINT */}
+        {printingSaleId && (
+          <div className="print-layer">
+            <TicketInline
+              saleId={printingSaleId}
+              onPrinted={() => {
+                setPrintingSaleId(null);
+              }}
+            />
+          </div>
+        )}
+      </div>
+    </PageShell>
+  </div>
+);
+}
+    
+
+/** ===================== UI helpers ===================== */
+
+function Section({ title }: { title: string }) {
+  return (
+    <div className="flex items-center justify-between mb-3">
+      <h2 className="text-lg font-extrabold">{title}</h2>
+      <span className="badge">Tap para agregar</span>
     </div>
   );
 }
+
+function ProductsGrid({
+  products,
+  onClick,
+  disabled,
+}: {
+  products: PosProduct[];
+  onClick: (p: PosProduct) => void;
+  disabled: boolean;
+}) {
+  return (
+    <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 xl:grid-cols-4">
+      {products.map((p) => (
+        <button
+          key={p.branch_product_id}
+          disabled={disabled}
+          onClick={() => onClick(p)}
+          className="card p-3 text-left hover:shadow-md transition active:scale-[0.99]"
+        >
+          <div className="w-full aspect-square rounded-2xl border border-gray-200 bg-gray-50 overflow-hidden flex items-center justify-center">
+            {p.image_url ? (
+              <img src={p.image_url} alt={p.name} className="w-full h-full object-contain" loading="lazy" />
+            ) : (
+              <div className="text-xs text-gray-400 font-semibold">Sin imagen</div>
+            )}
+          </div>
+
+          <div className="mt-3">
+            <div className="font-extrabold leading-tight line-clamp-2">{p.name}</div>
+            <div className="text-sm text-gray-500">${p.price.toLocaleString("es-CO")}</div>
+          </div>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function TotalsRow({ label, value, bold }: { label: string; value: number; bold?: boolean }) {
+  return (
+    <div className={`flex justify-between ${bold ? "text-base font-extrabold" : "text-sm"}`}>
+      <span className={bold ? "" : "text-gray-600"}>{label}</span>
+      <span>${value.toLocaleString("es-CO")}</span>
+    </div>
+  );
+}
+
+function PayInput({
+  label,
+  value,
+  setValue,
+  disabled,
+}: {
+  label: string;
+  value: string;
+  setValue: (v: string) => void;
+  disabled: boolean;
+}) {
+  return (
+    <label className="grid gap-1">
+      <span className="label">{label}</span>
+      <input
+        type="text"
+        inputMode="numeric"
+        pattern="[0-9.,]*"
+        value={value}
+        disabled={disabled}
+        onChange={(e) => setValue(e.target.value)}
+        className="input"
+      />
+    </label>
+  );
+}
+
+/** ===================== Ticket printing ===================== */
 
 function TicketInline({
   saleId,
@@ -851,7 +664,7 @@ function TicketInline({
     const run = async () => {
       const { data: saleRow } = await supabase
         .from("sales")
-        .select("id, receipt_number, subtotal, tax_total, total, created_at, branch_id, branches(name), customers(identification,name)")
+        .select("id, receipt_number, subtotal, tax_total, total, created_at, branch_id, branches(name)")
         .eq("id", saleId)
         .single();
 
@@ -889,34 +702,22 @@ function TicketInline({
 
   const branchName = sale.branches?.name ?? "Sucursal";
 
-  const customerName = sale.customers?.name ?? "CONSUMIDOR FINAL";
-  const customerId = sale.customers?.identification ?? null;
-
   return (
     <div className="ticket">
       <img src="/logo.png" style={{ width: 120, margin: "0 auto", display: "block" }} />
 
-      {/* ENCABEZADO */}
       <div className="center bold">CASA DEL KUMIS</div>
       <div className="center">NIT: 000000000-0</div>
       <div className="center">Comprobante interno - No válido DIAN</div>
 
       <div className="line" />
 
-      {/* META */}
       <div>Fecha: {new Date(sale.created_at).toLocaleString("es-CO")}</div>
       <div>Sucursal: {branchName}</div>
       <div>Comprobante: {receipt}</div>
 
       <div className="line" />
 
-      {/* ✅ NUEVO: CLIENTE */}
-      <div>Cliente: {customerName}</div>
-      {customerId && <div>Identificación: {customerId}</div>}
-
-      <div className="line" />
-
-      {/* ITEMS */}
       {items.map((it, i) => (
         <div key={i} className="item">
           <div className="row">
@@ -931,7 +732,6 @@ function TicketInline({
 
       <div className="line" />
 
-      {/* TOTALES */}
       <div className="row">
         <div className="left">Subtotal</div>
         <div className="right">${Number(sale.subtotal).toLocaleString("es-CO")}</div>
@@ -940,7 +740,6 @@ function TicketInline({
         <div className="left">Impoconsumo</div>
         <div className="right">${Number(sale.tax_total).toLocaleString("es-CO")}</div>
       </div>
-
       <div className="row bold">
         <div className="left">TOTAL</div>
         <div className="right">${Number(sale.total).toLocaleString("es-CO")}</div>
@@ -953,7 +752,6 @@ function TicketInline({
 
       <div className="line" />
 
-      {/* PAGOS */}
       <div className="bold">Pagos</div>
       {payments.map((p, i) => (
         <div key={i} className="row">
@@ -967,94 +765,7 @@ function TicketInline({
       </div>
 
       <div className="line" />
-
-      {/* FOOTER */}
       <div className="center">Gracias por su compra</div>
-
-      <style jsx global>{`
-        @page {
-          size: 80mm auto;
-          margin: 2mm;
-        }
-
-        @media print {
-          body * {
-            visibility: hidden !important;
-          }
-
-          .print-layer,
-          .print-layer * {
-            visibility: visible !important;
-          }
-
-          .print-layer {
-            position: absolute;
-            left: 0;
-            top: 0;
-            width: 80mm;
-            padding: 0;
-            margin: 0;
-            background: #fff;
-          }
-        }
-
-        .ticket {
-          font-family: Arial, sans-serif;
-          font-size: 11px;
-          width: 76mm;
-          line-height: 1.2;
-        }
-
-        .center {
-          text-align: center;
-        }
-
-        .bold {
-          font-weight: 700;
-        }
-
-        .line {
-          border-top: 1px dashed #000;
-          margin: 6px 0;
-        }
-
-        .row {
-          display: flex;
-          justify-content: space-between;
-          gap: 8px;
-          margin: 2px 0;
-        }
-
-        .left {
-          flex: 1;
-          overflow: hidden;
-          white-space: nowrap;
-          text-overflow: ellipsis;
-        }
-
-        .right {
-          min-width: 62px;
-          text-align: right;
-          white-space: nowrap;
-        }
-
-        .muted {
-          opacity: 0.75;
-          font-size: 10px;
-          margin-top: 1px;
-        }
-
-        .item {
-          margin-bottom: 4px;
-        }
-
-        .logo {
-          display: block;
-          margin: 0 auto 4px auto;
-          max-width: 120px;
-          height: auto;
-        }
-      `}</style>
     </div>
   );
 }
