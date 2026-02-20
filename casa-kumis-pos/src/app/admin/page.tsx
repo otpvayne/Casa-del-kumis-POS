@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { requireRole } from "@/lib/requireRole";
+import LoadingCard from "@/components/LoadingCard";
 
 type AdminItem = {
   title: string;
@@ -28,7 +29,7 @@ export default function AdminPage() {
     run();
   }, [router]);
 
-  if (loading) return <div className="container py-6">Cargando...</div>;
+  if (loading) return <LoadingCard title="Cargando POS..." />;
 
   const items: AdminItem[] = [
     {

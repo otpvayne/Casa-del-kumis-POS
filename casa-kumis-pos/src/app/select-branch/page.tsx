@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { useRouter } from "next/navigation";
+import LoadingCard from "@/components/LoadingCard";
 
 type Branch = {
   id: string;
@@ -65,7 +66,7 @@ export default function SelectBranchPage() {
     router.replace("/login");
   };
 
-  if (loading) return <div className="container py-6">Cargando...</div>;
+  if (loading) return <LoadingCard title="Cargando POS..." />;
   if (error) return <div className="container py-6 text-red-600">Error: {error}</div>;
 
   return (

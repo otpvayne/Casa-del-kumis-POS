@@ -5,6 +5,7 @@ import { supabase } from "@/lib/supabaseClient";
 import { useRouter } from "next/navigation";
 import { requireRole } from "@/lib/requireRole";
 import PageShell from "@/components/PageShell";
+import LoadingCard from "@/components/LoadingCard";
 
 type Branch = { id: string; name: string };
 type Product = { id: string; name: string; image_url?: string | null };
@@ -367,7 +368,7 @@ export default function AdminProductsPage() {
     }
   };
 
-  if (loading) return <div className="container py-6">Cargando...</div>;
+  if (loading) return <LoadingCard title="Cargando POS..." />;
 
   return (
     <div className="container py-8">

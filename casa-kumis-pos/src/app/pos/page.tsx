@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { useRouter } from "next/navigation";
 import PageShell from "@/components/PageShell";
+import LoadingCard from "@/components/LoadingCard";
 
 type PosProduct = {
   branch_product_id: string;
@@ -345,7 +346,7 @@ export default function PosPage() {
     sessionStorage.removeItem(`cart_${branchId}`);
   };
 
-  if (loading) return <div className="container py-6">Cargando POS...</div>;
+  if (loading) return <LoadingCard title="Cargando POS..." />;
   if (pageError) return <div className="container py-6 text-red-600">Error: {pageError}</div>;
 
   return (

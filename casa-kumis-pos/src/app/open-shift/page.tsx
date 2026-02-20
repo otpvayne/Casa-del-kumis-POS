@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { useRouter } from "next/navigation";
 import PageShell from "@/components/PageShell";
+import LoadingCard from "@/components/LoadingCard";
 
 export default function OpenShiftPage() {
   const router = useRouter();
@@ -92,7 +93,7 @@ export default function OpenShiftPage() {
     router.replace("/pos");
   };
 
-  if (loading) return <div className="container py-6">Cargando...</div>;
+  if (loading) return <LoadingCard title="Cargando POS..." />;
 
   return (
     <div className="container py-6">
