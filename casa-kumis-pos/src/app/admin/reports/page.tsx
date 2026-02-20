@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { useRouter } from "next/navigation";
 import { requireRole } from "@/lib/requireRole";
+import PageShell from "@/components/PageShell";
 
 type Branch = { id: string; name: string; is_active: boolean };
 
@@ -36,6 +37,14 @@ function ymd(d: Date) {
   return `${yyyy}-${mm}-${dd}`;
 }
 
+function round2(n: number) {
+  return Math.round(n * 100) / 100;
+}
+
+function money(n: number) {
+  return `$${Number(n ?? 0).toLocaleString("es-CO")}`;
+}
+
 export default function AdminReportsPage() {
   const router = useRouter();
 
@@ -66,14 +75,21 @@ export default function AdminReportsPage() {
     const role = await requireRole("ADMIN");
     if (!role.ok) return router.replace("/pos");
 
-    // branches
+    // Branches
     const { data: b, error: bErr } = await supabase
       .from("branches")
       .select("id,name,is_active")
       .order("name");
 
     if (bErr) throw new Error(bErr.message);
-    setBranches((b ?? []).map((x: any) => ({ id: x.id, name: x.name, is_active: Boolean(x.is_active) })));
+
+    setBranches(
+      (b ?? []).map((x: any) => ({
+        id: x.id,
+        name: x.name,
+        is_active: Boolean(x.is_active),
+      }))
+    );
 
     // Sales report
     const { data: sData, error: sErr } = await supabase.rpc("admin_sales_report", {
@@ -96,6 +112,7 @@ export default function AdminReportsPage() {
       pay_transfer: Number(r.pay_transfer ?? 0),
       pay_qr: Number(r.pay_qr ?? 0),
     }));
+
     setSales(mappedSales);
 
     // Products sold
@@ -115,6 +132,7 @@ export default function AdminReportsPage() {
       qty_sold: Number(r.qty_sold ?? 0),
       total_sold: Number(r.total_sold ?? 0),
     }));
+
     setProductsSold(mappedProd);
 
     setLoading(false);
@@ -122,7 +140,7 @@ export default function AdminReportsPage() {
 
   useEffect(() => {
     load().catch((e) => {
-      setErr(e.message ?? "Error cargando reportes");
+      setErr(e.message ?? "Error cargando reportes.");
       setLoading(false);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -145,179 +163,226 @@ export default function AdminReportsPage() {
     };
   }, [sales]);
 
-  if (loading) return <div style={{ padding: 24 }}>Cargando reportes admin…</div>;
-  if (err) return <div style={{ padding: 24, color: "red" }}>Error: {err}</div>;
+  if (loading) return <div className="container py-6">Cargando reportes...</div>;
 
   return (
-    <div style={{ padding: 24, display: "grid", gap: 16 }}>
-      <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-        <h1 style={{ margin: 0 }}>Admin · Reportes</h1>
-
-        <button onClick={() => router.push("/admin")} style={{ padding: 10, borderRadius: 10 }}>
-          Volver
-        </button>
-
-        <button onClick={() => load().catch(()=>{})} style={{ padding: 10, borderRadius: 10 }}>
-          Consultar
-        </button>
-      </div>
-
-      {/* Filtros */}
-      <div style={{ border: "1px solid #eee", borderRadius: 14, padding: 14 }}>
-        <h2 style={{ marginTop: 0 }}>Filtros</h2>
-
-        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
-          <label>
-            Desde{" "}
-            <input
-              type="date"
-              value={fromDate}
-              onChange={(e) => setFromDate(e.target.value)}
-              style={{ padding: 10, borderRadius: 10, border: "1px solid #ddd" }}
-            />
-          </label>
-
-          <label>
-            Hasta{" "}
-            <input
-              type="date"
-              value={toDate}
-              onChange={(e) => setToDate(e.target.value)}
-              style={{ padding: 10, borderRadius: 10, border: "1px solid #ddd" }}
-            />
-          </label>
-
-          <label>
-            Sucursal{" "}
-            <select
-              value={selectedBranchId}
-              onChange={(e) => setSelectedBranchId(e.target.value)}
-              style={{ padding: 10, borderRadius: 10, border: "1px solid #ddd", minWidth: 220 }}
-            >
-              <option value="">Todas</option>
-              {branches.map((b) => (
-                <option key={b.id} value={b.id}>
-                  {b.name} {!b.is_active ? "(inactiva)" : ""}
-                </option>
-              ))}
-            </select>
-          </label>
+    <div className="container py-8">
+      <PageShell
+  title={
+    <div className="flex items-start justify-between gap-4">
+      <div className="min-w-0">
+        <div className="flex flex-wrap items-center gap-2">
+          <h1 className="text-2xl font-extrabold tracking-tight text-gray-900">Reportes</h1>
+          <span className="badge">Admin</span>
         </div>
 
-        <div style={{ marginTop: 10, opacity: 0.7 }}>
-          Tip: para “mes”, usa Desde = primer día del mes y Hasta = último día del mes.
-        </div>
-      </div>
-
-      {/* KPIs */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(6, minmax(0, 1fr))", gap: 10 }}>
-        <Kpi title="Total ventas" value={`$${kpis.totalSales.toLocaleString("es-CO")}`} />
-        <Kpi title="Efectivo" value={`$${kpis.cash.toLocaleString("es-CO")}`} />
-        <Kpi title="Tarjeta" value={`$${kpis.card.toLocaleString("es-CO")}`} />
-        <Kpi title="Transfer" value={`$${kpis.transfer.toLocaleString("es-CO")}`} />
-        <Kpi title="QR" value={`$${kpis.qr.toLocaleString("es-CO")}`} />
-        <Kpi title="# Facturas" value={`${kpis.count}`} />
-      </div>
-
-      {/* Tabla ventas */}
-      <div style={{ border: "1px solid #eee", borderRadius: 14, padding: 14 }}>
-        <h2 style={{ marginTop: 0 }}>Facturas</h2>
-
-        <div style={{ overflowX: "auto", border: "1px solid #eee", borderRadius: 12 }}>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead>
-              <tr style={{ background: "#fafafa" }}>
-                <th style={th}>Fecha</th>
-                <th style={th}>Sucursal</th>
-                <th style={th}>Comprobante</th>
-                <th style={th}>Total</th>
-                <th style={th}>Efectivo</th>
-                <th style={th}>Tarjeta</th>
-                <th style={th}>Transfer</th>
-                <th style={th}>QR</th>
-              </tr>
-            </thead>
-            <tbody>
-              {sales.map((s) => (
-                <tr key={s.sale_id}>
-                  <td style={td}>{new Date(s.created_at).toLocaleString("es-CO")}</td>
-                  <td style={td}>{s.branch_name}</td>
-                  <td style={td}>{s.receipt_number ?? "-"}</td>
-                  <td style={td}>${s.total.toLocaleString("es-CO")}</td>
-                  <td style={td}>${s.pay_cash.toLocaleString("es-CO")}</td>
-                  <td style={td}>${s.pay_card.toLocaleString("es-CO")}</td>
-                  <td style={td}>${s.pay_transfer.toLocaleString("es-CO")}</td>
-                  <td style={td}>${s.pay_qr.toLocaleString("es-CO")}</td>
-                </tr>
-              ))}
-
-              {sales.length === 0 && (
-                <tr>
-                  <td style={td} colSpan={8}>
-                    No hay ventas en ese rango.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* Productos vendidos */}
-      <div style={{ border: "1px solid #eee", borderRadius: 14, padding: 14 }}>
-        <h2 style={{ marginTop: 0 }}>Productos vendidos</h2>
-
-        <div style={{ overflowX: "auto", border: "1px solid #eee", borderRadius: 12 }}>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead>
-              <tr style={{ background: "#fafafa" }}>
-                <th style={th}>Sucursal</th>
-                <th style={th}>Producto</th>
-                <th style={th}>Cantidad</th>
-                <th style={th}>Total</th>
-              </tr>
-            </thead>
-            <tbody>
-              {productsSold.map((p) => (
-                <tr key={`${p.branch_id}_${p.product_id}`}>
-                  <td style={td}>{p.branch_name}</td>
-                  <td style={td}>{p.product_name}</td>
-                  <td style={td}>{p.qty_sold}</td>
-                  <td style={td}>${p.total_sold.toLocaleString("es-CO")}</td>
-                </tr>
-              ))}
-
-              {productsSold.length === 0 && (
-                <tr>
-                  <td style={td} colSpan={4}>
-                    No hay productos vendidos en ese rango.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+        <div className="mt-2 text-sm text-gray-600">
+          Consulta ventas y productos vendidos por rango de fechas y sucursal.
         </div>
 
-        <div style={{ marginTop: 10, opacity: 0.7 }}>
-          Ordenado por cantidad vendida (desc).
+        <div className="mt-3 flex flex-wrap items-center gap-2 text-sm">
+          <span className="inline-flex items-center rounded-full border border-gray-200 bg-gray-50 px-3 py-1 font-semibold text-gray-700">
+            Desde: <span className="ml-1 font-extrabold text-gray-900">{fromDate}</span>
+          </span>
+
+          <span className="inline-flex items-center rounded-full border border-gray-200 bg-gray-50 px-3 py-1 font-semibold text-gray-700">
+            Hasta: <span className="ml-1 font-extrabold text-gray-900">{toDate}</span>
+          </span>
+
+          <span className="inline-flex items-center rounded-full border border-gray-200 bg-gray-50 px-3 py-1 font-semibold text-gray-700">
+            Sucursal:{" "}
+            <span className="ml-1 font-extrabold text-gray-900">
+              {selectedBranchId
+                ? branches.find((b) => b.id === selectedBranchId)?.name ?? "Seleccionada"
+                : "Todas"}
+            </span>
+          </span>
         </div>
       </div>
+    </div>
+  }
+  right={
+    <div className="flex gap-2">
+      <button className="btn" onClick={() => load().catch(() => {})}>
+        Consultar
+      </button>
+      <button className="btn" onClick={() => router.push("/admin")}>
+        Volver
+      </button>
+      <button className="btn" onClick={() => router.push("/admin/reports/sales-by-customer")}>
+  Ventas por cliente
+</button>
+    </div>
+  }
+>
+        {err && (
+          <div className="alert-err mb-4" style={{ whiteSpace: "pre-line" }}>
+            {err}
+          </div>
+        )}
+
+        {/* Filtros */}
+        <div className="card mb-4">
+          <div className="card-h flex items-center justify-between">
+            <div>
+              <div className="text-lg font-extrabold">Filtros</div>
+              <div className="text-sm text-gray-500">Ajusta el rango y la sucursal, luego presiona Consultar.</div>
+            </div>
+            <span className="badge">Admin</span>
+          </div>
+
+          <div className="card-b">
+            <div className="grid gap-3 sm:grid-cols-3">
+              <label className="grid gap-1">
+                <span className="label">Desde</span>
+                <input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} className="input" />
+              </label>
+
+              <label className="grid gap-1">
+                <span className="label">Hasta</span>
+                <input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} className="input" />
+              </label>
+
+              <label className="grid gap-1">
+                <span className="label">Sucursal</span>
+                <select value={selectedBranchId} onChange={(e) => setSelectedBranchId(e.target.value)} className="input">
+                  <option value="">Todas</option>
+                  {branches.map((b) => (
+                    <option key={b.id} value={b.id}>
+                      {b.name} {!b.is_active ? "(inactiva)" : ""}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+
+            <div className="mt-3 text-xs text-gray-500">
+              Tip: para “mes”, usa Desde = primer día del mes y Hasta = último día del mes.
+            </div>
+          </div>
+        </div>
+
+        {/* KPIs */}
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-6 mb-4">
+          <Kpi title="Total ventas" value={money(kpis.totalSales)} />
+          <Kpi title="Efectivo" value={money(kpis.cash)} />
+          <Kpi title="Tarjeta" value={money(kpis.card)} />
+          <Kpi title="Transferencia" value={money(kpis.transfer)} />
+          <Kpi title="QR" value={money(kpis.qr)} />
+          <Kpi title="Facturas" value={`${kpis.count}`} />
+        </div>
+
+        {/* Tabla ventas */}
+        <div className="card mb-4">
+          <div className="card-h flex items-center justify-between">
+            <div>
+              <div className="text-lg font-extrabold">Facturas</div>
+              <div className="text-sm text-gray-500">Detalle por venta y método de pago.</div>
+            </div>
+            <span className="badge">{sales.length} registro(s)</span>
+          </div>
+
+          <div className="card-b">
+            <div className="overflow-x-auto rounded-2xl border border-gray-200">
+              <table className="w-full border-collapse">
+                <thead>
+                  <tr className="bg-gray-50">
+                    <th className="p-3 text-left text-xs font-bold text-gray-600">Fecha</th>
+                    <th className="p-3 text-left text-xs font-bold text-gray-600">Sucursal</th>
+                    <th className="p-3 text-left text-xs font-bold text-gray-600">Comprobante</th>
+                    <th className="p-3 text-left text-xs font-bold text-gray-600">Total</th>
+                    <th className="p-3 text-left text-xs font-bold text-gray-600">Efectivo</th>
+                    <th className="p-3 text-left text-xs font-bold text-gray-600">Tarjeta</th>
+                    <th className="p-3 text-left text-xs font-bold text-gray-600">Transfer</th>
+                    <th className="p-3 text-left text-xs font-bold text-gray-600">QR</th>
+                  </tr>
+                </thead>
+
+                <tbody>
+                  {sales.map((s) => (
+                    <tr key={s.sale_id} className="border-t border-gray-200">
+                      <td className="p-3 text-sm text-gray-700">{new Date(s.created_at).toLocaleString("es-CO")}</td>
+                      <td className="p-3 text-sm font-semibold text-gray-800">{s.branch_name}</td>
+                      <td className="p-3 text-sm text-gray-700">{s.receipt_number ?? "-"}</td>
+                      <td className="p-3 text-sm font-extrabold text-gray-900">{money(s.total)}</td>
+                      <td className="p-3 text-sm text-gray-700">{money(s.pay_cash)}</td>
+                      <td className="p-3 text-sm text-gray-700">{money(s.pay_card)}</td>
+                      <td className="p-3 text-sm text-gray-700">{money(s.pay_transfer)}</td>
+                      <td className="p-3 text-sm text-gray-700">{money(s.pay_qr)}</td>
+                    </tr>
+                  ))}
+
+                  {sales.length === 0 && (
+                    <tr>
+                      <td className="p-4 text-sm text-gray-500" colSpan={8}>
+                        No hay ventas en ese rango.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        {/* Productos vendidos */}
+        <div className="card">
+          <div className="card-h flex items-center justify-between">
+            <div>
+              <div className="text-lg font-extrabold">Productos vendidos</div>
+              <div className="text-sm text-gray-500">Acumulado por producto en el rango seleccionado.</div>
+            </div>
+            <span className="badge">{productsSold.length} producto(s)</span>
+          </div>
+
+          <div className="card-b">
+            <div className="overflow-x-auto rounded-2xl border border-gray-200">
+              <table className="w-full border-collapse">
+                <thead>
+                  <tr className="bg-gray-50">
+                    <th className="p-3 text-left text-xs font-bold text-gray-600">Sucursal</th>
+                    <th className="p-3 text-left text-xs font-bold text-gray-600">Producto</th>
+                    <th className="p-3 text-left text-xs font-bold text-gray-600">Cantidad</th>
+                    <th className="p-3 text-left text-xs font-bold text-gray-600">Total</th>
+                  </tr>
+                </thead>
+
+                <tbody>
+                  {productsSold.map((p) => (
+                    <tr key={`${p.branch_id}_${p.product_id}`} className="border-t border-gray-200">
+                      <td className="p-3 text-sm font-semibold text-gray-800">{p.branch_name}</td>
+                      <td className="p-3 text-sm text-gray-700">{p.product_name}</td>
+                      <td className="p-3 text-sm font-extrabold text-gray-900">{p.qty_sold}</td>
+                      <td className="p-3 text-sm font-extrabold text-gray-900">{money(p.total_sold)}</td>
+                    </tr>
+                  ))}
+
+                  {productsSold.length === 0 && (
+                    <tr>
+                      <td className="p-4 text-sm text-gray-500" colSpan={4}>
+                        No hay productos vendidos en ese rango.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="mt-3 text-xs text-gray-500">Ordenado por cantidad vendida (desc).</div>
+          </div>
+        </div>
+      </PageShell>
     </div>
   );
 }
 
 function Kpi({ title, value }: { title: string; value: string }) {
   return (
-    <div style={{ border: "1px solid #eee", borderRadius: 12, padding: 12 }}>
-      <div style={{ opacity: 0.7, fontSize: 12 }}>{title}</div>
-      <div style={{ fontSize: 18, fontWeight: 900 }}>{value}</div>
+    <div className="card">
+      <div className="card-b">
+        <div className="text-xs font-semibold text-gray-500">{title}</div>
+        <div className="mt-1 text-lg font-extrabold text-gray-900">{value}</div>
+      </div>
     </div>
   );
 }
-
-function round2(n: number) {
-  return Math.round(n * 100) / 100;
-}
-
-const th: React.CSSProperties = { textAlign: "left", padding: 10, borderBottom: "1px solid #eee", fontSize: 12 };
-const td: React.CSSProperties = { padding: 10, borderBottom: "1px solid #f1f1f1", fontSize: 12 };
