@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { useRouter } from "next/navigation";
 import PageShell from "@/components/PageShell";
-
+import LoadingCard from "@/components/LoadingCard";
 type Totals = {
   shift_id: string;
   expected_total: number;
@@ -147,7 +147,7 @@ export default function CloseShiftPage() {
     }
   };
 
-  if (loading) return <div className="container py-6">Cargando cierre de turno...</div>;
+  if (loading) return <LoadingCard title="Cargando POS..." />;
   if (err) return <div className="container py-6 text-red-600">Error: {err}</div>;
   if (!totals) return <div className="container py-6">Sin datos de turno.</div>;
 

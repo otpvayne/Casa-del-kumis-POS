@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
+import LoadingCard from "@/components/LoadingCard";
 
 type Branch = {
   id: string;
@@ -32,7 +33,7 @@ export default function Home() {
     run();
   }, []);
 
-  if (loading) return <div style={{ padding: 24 }}>Cargando...</div>;
+  if (loading) return <LoadingCard title="Cargando POS..." />;
   if (error) return <div style={{ padding: 24 }}>Error: {error}</div>;
 
   return (

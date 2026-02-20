@@ -5,6 +5,7 @@ import { supabase } from "@/lib/supabaseClient";
 import { useRouter } from "next/navigation";
 import { requireRole } from "@/lib/requireRole";
 import PageShell from "@/components/PageShell";
+import LoadingCard from "@/components/LoadingCard";
 
 type Branch = {
   id: string;
@@ -149,7 +150,7 @@ export default function AdminBranchesPage() {
     }
   };
 
-  if (loading) return <div className="container py-6">Cargando sucursales...</div>;
+  if (loading) return <LoadingCard title="Cargando POS..." />;
 
   return (
     <div className="container py-8">

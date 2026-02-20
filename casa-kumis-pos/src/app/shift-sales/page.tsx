@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { useRouter } from "next/navigation";
+import LoadingCard from "@/components/LoadingCard";
 
 type SaleRow = {
   id: string;
@@ -225,7 +226,7 @@ export default function ShiftSalesPage() {
   };
 
   if (loadingAuth) return <div style={{ padding: 24 }}>Cargando...</div>;
-  if (loading) return <div style={{ padding: 24 }}>Cargando historial del turno...</div>;
+  if (loading) return <LoadingCard title="Cargando POS..." />;
 
   return (
     <div style={{ padding: 24, maxWidth: 900 }}>

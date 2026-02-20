@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
+import LoadingCard from "@/components/LoadingCard";
 
 export default function TicketPage() {
   const params = useParams<{ saleId: string }>();
@@ -85,7 +86,7 @@ export default function TicketPage() {
   );
 
   if (!saleId) return <div style={{ padding: 24 }}>Cargando ticket...</div>;
-  if (loading) return <div style={{ padding: 24 }}>Cargando ticket...</div>;
+  if (loading) return <LoadingCard title="Cargando POS..." />;
   if (err) return <div style={{ padding: 24, color: "red" }}>Error: {err}</div>;
 
   return (
