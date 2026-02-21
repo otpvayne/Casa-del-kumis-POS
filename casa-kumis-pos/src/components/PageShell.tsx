@@ -1,33 +1,31 @@
-"use client";
+import UserChip from "@/components/UserChip";
 
-import React from "react";
-
-export default function PageShell({
-  title,
-  subtitle,
-  right,
-  children,
-}: {
+type PageShellProps = {
   title: React.ReactNode;
   subtitle?: React.ReactNode;
   right?: React.ReactNode;
   children: React.ReactNode;
-}) {
+};
+
+export default function PageShell({ title, subtitle, right, children }: PageShellProps) {
   return (
     <div className="page">
       <div className="mb-5 flex items-start justify-between gap-4">
         <div className="min-w-0">
-          <div className="min-w-0">{title}</div>
+          <div className="text-2xl font-extrabold tracking-tight">{title}</div>
 
           {subtitle ? (
-            <div className="page-subtitle mt-2">{subtitle}</div>
+            <div className="mt-2 text-sm text-gray-600">{subtitle}</div>
           ) : null}
         </div>
 
-        {right ? <div className="shrink-0">{right}</div> : null}
+        <div className="flex items-center gap-2">
+          {right ? right : null}
+          <UserChip />
+        </div>
       </div>
 
-      <div>{children}</div>
+      {children}
     </div>
   );
 }

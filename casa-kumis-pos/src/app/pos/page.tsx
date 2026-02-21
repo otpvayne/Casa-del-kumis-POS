@@ -5,6 +5,7 @@ import { supabase } from "@/lib/supabaseClient";
 import { useRouter } from "next/navigation";
 import PageShell from "@/components/PageShell";
 import LoadingCard from "@/components/LoadingCard";
+import PrintPortal from "@/components/PrintPortal";
 
 type PosProduct = {
   branch_product_id: string;
@@ -540,16 +541,19 @@ export default function PosPage() {
         )}
 
         {/* PRINT */}
-        {printingSaleId && (
-          <div className="print-layer">
-            <TicketInline
-              saleId={printingSaleId}
-              onPrinted={() => {
-                setPrintingSaleId(null);
-              }}
-            />
-          </div>
-        )}
+
+{printingSaleId && (
+  <PrintPortal>
+    <div className="print-layer">
+      <TicketInline
+        saleId={printingSaleId}
+        onPrinted={() => {
+          setPrintingSaleId(null);
+        }}
+      />
+    </div>
+  </PrintPortal>
+)}
       </div>
     </PageShell>
   </div>
