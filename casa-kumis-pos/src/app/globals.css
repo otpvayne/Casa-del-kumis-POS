@@ -138,22 +138,27 @@ body {
 }
 
 @media print {
-  html, body {
+  @page {
+  size: 80mm;
+  margin: 0;
+}
+
+  html,
+  body {
     margin: 0 !important;
     padding: 0 !important;
+    width: 80mm !important;
     height: auto !important;
+    overflow: hidden !important;
+    background: #fff !important;
   }
 
-  @page {
-    size: 80mm auto;
-    margin: 0;
-  }
-
-  /* Oculta todo excepto el ticket */
-  body > *:not(.print-layer) {
+  /* Oculta todo el app */
+  body > * {
     display: none !important;
   }
 
+  /* Muestra solo el layer de impresión */
   .print-layer {
     display: block !important;
     position: fixed !important;
@@ -165,9 +170,18 @@ body {
     background: #fff !important;
   }
 
+  /* Importante: NO forzar block a todos */
   .print-layer * {
-    page-break-inside: avoid !important;
+    display: revert !important; /* <- clave para que no cree páginas extra */
+  }
+
+  /* evita cortes raros en tablas/imágenes */
+  .print-layer,
+  .print-layer table,
+  .print-layer img,
+  .print-layer svg {
     break-inside: avoid !important;
+    page-break-inside: avoid !important;
   }
 }
 

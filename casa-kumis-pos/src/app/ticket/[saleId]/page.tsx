@@ -145,10 +145,6 @@ export default function TicketPage() {
       <div className="center">Gracias por su compra</div>
 
       <style jsx global>{`
-        @page {
-          size: 80mm auto;
-          margin: 4mm;
-        }
         .ticket {
           font-family: Arial, sans-serif;
           font-size: 12px;
