@@ -27,6 +27,14 @@ type CartItem = {
 
 type PaymentMethod = "CASH" | "CARD" | "TRANSFER" | "QR";
 
+type Customer = {
+  id: string;
+  identification: string;
+  name: string;
+  phone: string | null;
+  email: string | null;
+};
+
 export default function PosPage() {
   const router = useRouter();
   const [branchId, setBranchId] = useState<string | null>(null);
@@ -54,6 +62,168 @@ export default function PosPage() {
   const [saleOkMsg, setSaleOkMsg] = useState<string | null>(null);
   const [printingSaleId, setPrintingSaleId] = useState<string | null>(null);
 
+  // =========================
+  // ✅ Clientes (POS)
+  // =========================
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [customerSearch, setCustomerSearch] = useState<string>("");
+  const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
+
+  // crear cliente rápido
+  const [creatingCustomer, setCreatingCustomer] = useState(false);
+  const [newCustId, setNewCustId] = useState("");
+  const [newCustName, setNewCustName] = useState("");
+  const [newCustPhone, setNewCustPhone] = useState("");
+  const [newCustEmail, setNewCustEmail] = useState("");
+
+  const loadTaxRate = async () => {
+    try {
+      const { data, error } = await supabase
+        .from("app_settings")
+        .select("value")
+        .eq("key", "tax_rate")
+        .single();
+
+      if (error) throw new Error(error.message);
+
+      const rate = Number(data?.value ?? "0.08");
+      return Number.isNaN(rate) ? 0.08 : rate;
+    } catch {
+      return 0.08;
+    }
+  };
+
+  const loadCustomers = async () => {
+    // Traemos una lista corta (puedes ampliar luego)
+    const { data, error } = await supabase
+      .from("customers")
+      .select("identification,name,phone,email")
+      .order("created_at", { ascending: false })
+      .limit(200);
+
+    if (error) throw new Error(error.message);
+
+    const mapped: Customer[] = (data ?? []).map((c: any) => ({
+      id: String(c.id),
+      identification: String(c.identification ?? ""),
+      name: String(c.name ?? ""),
+      phone: c.phone ? String(c.phone) : null,
+      email: c.email ? String(c.email) : null,
+    }));
+
+    setCustomers(mapped);
+
+    // Selección default: CONSUMIDOR FINAL si existe
+    const cf =
+      mapped.find((x) => x.identification === "CF") ||
+      mapped.find((x) => x.name?.toUpperCase() === "CONSUMIDOR FINAL");
+
+    if (cf) setSelectedCustomerId(cf.id);
+    else setSelectedCustomerId(null);
+  };
+
+  const ensureConsumidorFinal = async (): Promise<Customer> => {
+    // 1) Si ya está en memoria, úsalo
+    const inState =
+      customers.find((x) => x.identification === "CF") ||
+      customers.find((x) => x.name?.toUpperCase() === "CONSUMIDOR FINAL");
+    if (inState) return inState;
+
+    // 2) Buscar en BD
+    const { data: existing, error: exErr } = await supabase
+      .from("customers")
+      .select("id,identification,name,phone,email")
+      .or("identification.eq.CF,name.ilike.%CONSUMIDOR FINAL%")
+      .limit(1)
+      .maybeSingle();
+
+    if (exErr) throw new Error(exErr.message);
+
+    if (existing?.id) {
+      const c: Customer = {
+        id: String(existing.id),
+        identification: String(existing.identification ?? "CF"),
+        name: String(existing.name ?? "CONSUMIDOR FINAL"),
+        phone: existing.phone ? String(existing.phone) : null,
+        email: existing.email ? String(existing.email) : null,
+      };
+      return c;
+    }
+
+    // 3) Crear CONSUMIDOR FINAL
+    const { data: created, error: cErr } = await supabase
+      .from("customers")
+      .insert({
+        identification: "CF",
+        name: "CONSUMIDOR FINAL",
+        phone: null,
+        email: null,
+      })
+      .select("id,identification,name,phone,email")
+      .single();
+
+    if (cErr || !created) throw new Error(cErr?.message ?? "No se pudo crear CONSUMIDOR FINAL.");
+
+    const cf: Customer = {
+      id: String(created.id),
+      identification: String(created.identification ?? "CF"),
+      name: String(created.name ?? "CONSUMIDOR FINAL"),
+      phone: created.phone ? String(created.phone) : null,
+      email: created.email ? String(created.email) : null,
+    };
+
+    return cf;
+  };
+
+  const createCustomerQuick = async () => {
+    const identification = newCustId.trim();
+    const name = newCustName.trim();
+
+    if (!identification) return setPayError("Identificación obligatoria.");
+    if (!name) return setPayError("Nombre obligatorio.");
+
+    setPayError(null);
+    setCreatingCustomer(true);
+
+    try {
+      const { data, error } = await supabase
+        .from("customers")
+        .insert({
+          identification,
+          name,
+          phone: newCustPhone.trim() || null,
+          email: newCustEmail.trim() || null,
+        })
+        .select("id,identification,name,phone,email")
+        .single();
+
+      if (error || !data) throw new Error(error?.message ?? "Error creando cliente.");
+
+      const created: Customer = {
+        id: String(data.id),
+        identification: String(data.identification ?? ""),
+        name: String(data.name ?? ""),
+        phone: data.phone ? String(data.phone) : null,
+        email: data.email ? String(data.email) : null,
+      };
+
+      setCustomers((prev) => [created, ...prev].slice(0, 200));
+      setSelectedCustomerId(created.id);
+
+      // reset form
+      setNewCustId("");
+      setNewCustName("");
+      setNewCustPhone("");
+      setNewCustEmail("");
+
+      setSaleOkMsg("Cliente creado ✅");
+    } catch (e: any) {
+      setPayError(e?.message ?? "No se pudo crear el cliente.");
+    } finally {
+      setCreatingCustomer(false);
+    }
+  };
+
   useEffect(() => {
     const run = async () => {
       const { data } = await supabase.auth.getSession();
@@ -72,12 +242,7 @@ export default function PosPage() {
       setBranchId(id);
 
       // ✅ traer nombre de sucursal
-      const { data: bRow } = await supabase
-        .from("branches")
-        .select("name")
-        .eq("id", id)
-        .maybeSingle();
-
+      const { data: bRow } = await supabase.from("branches").select("name").eq("id", id).maybeSingle();
       if (bRow?.name) setBranchName(String(bRow.name));
 
       // ✅ turno abierto
@@ -94,13 +259,12 @@ export default function PosPage() {
       setShiftId(shift.id);
       setShiftOpenedAt(shift.opened_at ? String(shift.opened_at) : null);
 
-      const { data: settingsRow } = await supabase
-        .from("settings")
-        .select("tax_rate")
-        .limit(1)
-        .maybeSingle();
+      // ✅ impuesto global desde app_settings
+      const rate = await loadTaxRate();
+      setTaxRate(rate);
 
-      if (settingsRow?.tax_rate != null) setTaxRate(Number(settingsRow.tax_rate));
+      // ✅ clientes (para seleccionar en cobro)
+      await loadCustomers();
 
       // ✅ productos + imagen
       const { data: rows, error: prodErr } = await supabase
@@ -130,7 +294,10 @@ export default function PosPage() {
       setLoading(false);
     };
 
-    run();
+    run().catch((e: any) => {
+      setPageError(e?.message ?? "Error cargando POS.");
+      setLoading(false);
+    });
   }, [router]);
 
   // --- Carrito
@@ -159,9 +326,7 @@ export default function PosPage() {
 
   const incQty = (branchProductId: string) => {
     setSaleOkMsg(null);
-    setCart((prev) =>
-      prev.map((it) => (it.branch_product_id === branchProductId ? { ...it, qty: it.qty + 1 } : it))
-    );
+    setCart((prev) => prev.map((it) => (it.branch_product_id === branchProductId ? { ...it, qty: it.qty + 1 } : it)));
   };
 
   const decQty = (branchProductId: string) => {
@@ -209,13 +374,27 @@ export default function PosPage() {
     return Math.round((toNum(cash) + toNum(card) + toNum(transfer) + toNum(qr)) * 100) / 100;
   }, [cash, card, transfer, qr]);
 
-  const openPayModal = () => {
+  const openPayModal = async () => {
     setPayError(null);
     setSaleOkMsg(null);
     setCash("0");
     setCard("0");
     setTransfer("0");
     setQr("0");
+    setCustomerSearch("");
+
+    // Default: Consumidor final (si existe o crearlo)
+    try {
+      const cf = await ensureConsumidorFinal();
+      setSelectedCustomerId(cf.id);
+
+      // refrescar lista por si lo acabamos de crear
+      await loadCustomers();
+    } catch {
+      // si falla, al menos no bloqueamos el cobro
+      setSelectedCustomerId(null);
+    }
+
     setShowPay(true);
   };
 
@@ -224,10 +403,28 @@ export default function PosPage() {
   const formatShift = (iso: string | null) => {
     if (!iso) return "Turno activo";
     const d = new Date(iso);
-    // hora bonita
     return `Turno: ${d.toLocaleTimeString("es-CO", { hour: "2-digit", minute: "2-digit" })}`;
-    // si quieres fecha también: + ` (${d.toLocaleDateString("es-CO")})`
   };
+
+  const filteredCustomers = useMemo(() => {
+    const q = customerSearch.trim().toLowerCase();
+    if (!q) return customers.slice(0, 30);
+
+    return customers
+      .filter((c) => {
+        const a = (c.identification ?? "").toLowerCase();
+        const b = (c.name ?? "").toLowerCase();
+        const p = (c.phone ?? "").toLowerCase();
+        const e = (c.email ?? "").toLowerCase();
+        return a.includes(q) || b.includes(q) || p.includes(q) || e.includes(q);
+      })
+      .slice(0, 30);
+  }, [customers, customerSearch]);
+
+  const selectedCustomer = useMemo(() => {
+    if (!selectedCustomerId) return null;
+    return customers.find((c) => c.id === selectedCustomerId) ?? null;
+  }, [customers, selectedCustomerId]);
 
   const saveSale = async () => {
     if (!branchId || !shiftId) return;
@@ -265,11 +462,25 @@ export default function PosPage() {
       return;
     }
 
+    // ✅ Cliente obligatorio: si no hay seleccionado, usamos Consumidor Final
+    let customerId = selectedCustomerId;
+    try {
+      if (!customerId) {
+        const cf = await ensureConsumidorFinal();
+        customerId = cf.id;
+      }
+    } catch {
+      // si falla, queda null (pero no debería)
+      customerId = selectedCustomerId;
+    }
+
+    // ✅ Insert venta (incluye customer_id)
     const { data: saleRow, error: saleErr } = await supabase
       .from("sales")
       .insert({
         branch_id: branchId,
         shift_id: shiftId,
+        customer_id: customerId, // 👈 IMPORTANT
         subtotal,
         tax_total: taxTotal,
         total,
@@ -279,7 +490,17 @@ export default function PosPage() {
 
     if (saleErr || !saleRow) {
       setSavingSale(false);
-      setPayError(saleErr?.message ?? "Error creando venta.");
+
+      // mensaje útil si no existe customer_id en sales
+      const msg = saleErr?.message ?? "Error creando venta.";
+      if (msg.toLowerCase().includes("customer_id")) {
+        setPayError(
+          `Tu tabla sales no tiene la columna customer_id.\n\nSolución rápida (SQL):\nALTER TABLE sales ADD COLUMN customer_id uuid NULL REFERENCES customers(id);\n\nLuego vuelve a intentar.`
+        );
+        return;
+      }
+
+      setPayError(msg);
       return;
     }
 
@@ -313,11 +534,7 @@ export default function PosPage() {
       return;
     }
 
-    const { data: shiftRow, error: shGetErr } = await supabase
-      .from("shifts")
-      .select("expected_total")
-      .eq("id", shiftId)
-      .single();
+    const { data: shiftRow, error: shGetErr } = await supabase.from("shifts").select("expected_total").eq("id", shiftId).single();
 
     if (shGetErr) {
       setSavingSale(false);
@@ -328,10 +545,7 @@ export default function PosPage() {
     const currentExpected = Number(shiftRow.expected_total ?? 0);
     const newExpected = Math.round((currentExpected + total) * 100) / 100;
 
-    const { error: shUpdErr } = await supabase
-      .from("shifts")
-      .update({ expected_total: newExpected })
-      .eq("id", shiftId);
+    const { error: shUpdErr } = await supabase.from("shifts").update({ expected_total: newExpected }).eq("id", shiftId);
 
     if (shUpdErr) {
       setSavingSale(false);
@@ -351,215 +565,317 @@ export default function PosPage() {
   if (pageError) return <div className="container py-6 text-red-600">Error: {pageError}</div>;
 
   return (
-  <div className="mx-auto w-full max-w-[1400px] px-6 py-6 lg:px-10">
-    <PageShell
-      title={
-        <div className="flex items-center justify-between gap-4">
-          <div className="min-w-0">
-            <div className="text-xs font-semibold uppercase tracking-wider text-gray-500">
-              Operación
-            </div>
-            <div className="mt-1 text-3xl font-black tracking-tight text-gray-900">
-              Punto de venta
-            </div>
-          </div>
-
-          {/* Estado visual sutil (sin emojis) */}
-          <div className="hidden sm:flex items-center gap-2 rounded-full border border-gray-200 bg-white px-3 py-2 shadow-sm">
-            <span className="h-2 w-2 rounded-full bg-emerald-500" />
-            <span className="text-xs font-semibold text-gray-700">Activo</span>
-          </div>
-        </div>
-      }
-      subtitle={
-        <div className="mt-4 rounded-2xl border border-gray-200 bg-white/70 px-4 py-3 shadow-sm">
-          <div className="flex flex-wrap items-center gap-2 text-sm">
-            <span className="inline-flex items-center rounded-full border border-gray-200 bg-gray-50 px-3 py-1 font-semibold text-gray-700">
-              Sucursal: <span className="ml-1 font-extrabold">{branchName}</span>
-            </span>
-
-            <span className="text-gray-300">•</span>
-
-            <span className="inline-flex items-center rounded-full border border-blue-200 bg-blue-50 px-3 py-1 font-semibold text-blue-700">
-              Turno: <span className="ml-1 font-extrabold">{formatShift(shiftOpenedAt)}</span>
-            </span>
-
-            <span className="text-gray-300">•</span>
-
-            <span className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 font-semibold text-emerald-700">
-              Impuesto: <span className="ml-1 font-extrabold">{(taxRate * 100).toFixed(2)}%</span>
-            </span>
-          </div>
-        </div>
-      }
-    >
-      <div className="grid gap-4 lg:grid-cols-[2fr_1fr]">
-        {/* IZQUIERDA */}
-        <div className={savingSale ? "opacity-60 pointer-events-none" : ""}>
-          <Section title="Favoritos" />
-          <ProductsGrid products={favorite} onClick={addToCart} disabled={savingSale} />
-
-          <div className="h-5" />
-
-          <Section title="Todos" />
-          <ProductsGrid products={others} onClick={addToCart} disabled={savingSale} />
-        </div>
-
-        {/* DERECHA */}
-        <div className="card h-fit">
-          <div className="card-h flex items-center justify-between">
-            <div>
-              <div className="text-lg font-extrabold">Carrito</div>
-              <div className="text-xs text-gray-500">{cart.length ? `${cart.length} ítem(s)` : "Vacío"}</div>
+    <div className="mx-auto w-full max-w-[1400px] px-6 py-6 lg:px-10">
+      <PageShell
+        title={
+          <div className="flex items-center justify-between gap-4">
+            <div className="min-w-0">
+              <div className="text-xs font-semibold uppercase tracking-wider text-gray-500">Operación</div>
+              <div className="mt-1 text-3xl font-black tracking-tight text-gray-900">Punto de venta</div>
             </div>
 
-            {shiftId && (
-              <button
-                className="btn"
-                onClick={() => {
-                  if (cart.length > 0) {
-                    alert("No puedes cerrar turno con productos en el carrito. Finaliza la venta o vacía el carrito.");
-                    return;
-                  }
-                  router.push("/close-shift");
-                }}
-                disabled={savingSale}
-              >
-                Cerrar turno
-              </button>
-            )}
+            {/* Estado visual sutil */}
+            <div className="hidden sm:flex items-center gap-2 rounded-full border border-gray-200 bg-white px-3 py-2 shadow-sm">
+              <span className="h-2 w-2 rounded-full bg-emerald-500" />
+              <span className="text-xs font-semibold text-gray-700">Activo</span>
+            </div>
+          </div>
+        }
+        subtitle={
+          <div className="mt-4 rounded-2xl border border-gray-200 bg-white/70 px-4 py-3 shadow-sm">
+            <div className="flex flex-wrap items-center gap-2 text-sm">
+              <span className="inline-flex items-center rounded-full border border-gray-200 bg-gray-50 px-3 py-1 font-semibold text-gray-700">
+                Sucursal: <span className="ml-1 font-extrabold">{branchName}</span>
+              </span>
+
+              <span className="text-gray-300">•</span>
+
+              <span className="inline-flex items-center rounded-full border border-blue-200 bg-blue-50 px-3 py-1 font-semibold text-blue-700">
+                Turno: <span className="ml-1 font-extrabold">{formatShift(shiftOpenedAt)}</span>
+              </span>
+
+              <span className="text-gray-300">•</span>
+
+              <span className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 font-semibold text-emerald-700">
+                Impuesto: <span className="ml-1 font-extrabold">{(taxRate * 100).toFixed(2)}%</span>
+              </span>
+            </div>
+          </div>
+        }
+      >
+        <div className="grid gap-4 lg:grid-cols-[2fr_1fr]">
+          {/* IZQUIERDA */}
+          <div className={savingSale ? "opacity-60 pointer-events-none" : ""}>
+            <Section title="Favoritos" />
+            <ProductsGrid products={favorite} onClick={addToCart} disabled={savingSale} />
+
+            <div className="h-5" />
+
+            <Section title="Todos" />
+            <ProductsGrid products={others} onClick={addToCart} disabled={savingSale} />
           </div>
 
-          <div className="card-b">
-            {saleOkMsg && <div className="alert-ok mb-4">{saleOkMsg}</div>}
-
-            {cart.length === 0 ? (
-              <p className="text-sm text-gray-500">Toca un producto para agregarlo.</p>
-            ) : (
-              <div className="space-y-3">
-                {cart.map((it) => (
-                  <div key={it.branch_product_id} className="rounded-2xl border border-gray-200 p-3">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="flex items-center gap-3 min-w-0">
-                        <div className="h-12 w-12 rounded-2xl border border-gray-200 bg-gray-50 overflow-hidden flex items-center justify-center">
-                          {it.image_url ? (
-                            <img src={it.image_url} alt={it.name} className="w-full h-full object-contain" />
-                          ) : (
-                            <div className="text-[10px] text-gray-400 font-bold">IMG</div>
-                          )}
-                        </div>
-
-                        <div className="min-w-0">
-                          <div className="font-extrabold truncate">{it.name}</div>
-                          <div className="text-xs text-gray-500">Unit: ${it.unit_price.toLocaleString("es-CO")}</div>
-                        </div>
-                      </div>
-
-                      <div className="text-sm font-extrabold">
-                        ${(it.unit_price * it.qty).toLocaleString("es-CO")}
-                      </div>
-                    </div>
-
-                    <div className="mt-3 flex items-center gap-2">
-                      <button className="btn px-3 py-1" disabled={savingSale} onClick={() => decQty(it.branch_product_id)}>
-                        –
-                      </button>
-                      <div className="w-10 text-center font-bold">{it.qty}</div>
-                      <button className="btn px-3 py-1" disabled={savingSale} onClick={() => incQty(it.branch_product_id)}>
-                        +
-                      </button>
-
-                      <button
-                        className="btn btn-ghost ml-auto px-3 py-1"
-                        disabled={savingSale}
-                        onClick={() => removeItem(it.branch_product_id)}
-                      >
-                        Quitar
-                      </button>
-                    </div>
-                  </div>
-                ))}
+          {/* DERECHA */}
+          <div className="card h-fit">
+            <div className="card-h flex items-center justify-between">
+              <div>
+                <div className="text-lg font-extrabold">Carrito</div>
+                <div className="text-xs text-gray-500">{cart.length ? `${cart.length} ítem(s)` : "Vacío"}</div>
               </div>
-            )}
 
-            <div className="my-4 border-t border-gray-200" />
-
-            <TotalsRow label="Subtotal" value={subtotal} />
-            <TotalsRow label="Impuesto" value={taxTotal} />
-            <TotalsRow label="Total" value={total} bold />
-
-            <div className="mt-4 flex gap-2">
-              <button className="btn w-32" disabled={cart.length === 0 || savingSale} onClick={clearCart}>
-                Vaciar
-              </button>
-              <button className="btn btn-primary flex-1" disabled={cart.length === 0 || savingSale} onClick={openPayModal}>
-                Cobrar
-              </button>
+              {shiftId && (
+                <button
+                  className="btn"
+                  onClick={() => {
+                    if (cart.length > 0) {
+                      alert("No puedes cerrar turno con productos en el carrito. Finaliza la venta o vacía el carrito.");
+                      return;
+                    }
+                    router.push("/close-shift");
+                  }}
+                  disabled={savingSale}
+                >
+                  Cerrar turno
+                </button>
+              )}
             </div>
-          </div>
-        </div>
 
-        {/* MODAL PAGO */}
-        {showPay && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40">
-            <div className="card w-full max-w-md">
-              <div className="card-h flex items-center justify-between">
-                <div>
-                  <div className="text-lg font-extrabold">Cobrar</div>
-                  <div className="text-sm text-gray-500">
-                    Total a pagar: <span className="font-bold">${total.toLocaleString("es-CO")}</span>
-                  </div>
+            <div className="card-b">
+              {saleOkMsg && <div className="alert-ok mb-4">{saleOkMsg}</div>}
+
+              {cart.length === 0 ? (
+                <p className="text-sm text-gray-500">Toca un producto para agregarlo.</p>
+              ) : (
+                <div className="space-y-3">
+                  {cart.map((it) => (
+                    <div key={it.branch_product_id} className="rounded-2xl border border-gray-200 p-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className="h-12 w-12 rounded-2xl border border-gray-200 bg-gray-50 overflow-hidden flex items-center justify-center">
+                            {it.image_url ? (
+                              <img src={it.image_url} alt={it.name} className="w-full h-full object-contain" />
+                            ) : (
+                              <div className="text-[10px] text-gray-400 font-bold">IMG</div>
+                            )}
+                          </div>
+
+                          <div className="min-w-0">
+                            <div className="font-extrabold truncate">{it.name}</div>
+                            <div className="text-xs text-gray-500">Unit: ${it.unit_price.toLocaleString("es-CO")}</div>
+                          </div>
+                        </div>
+
+                        <div className="text-sm font-extrabold">${(it.unit_price * it.qty).toLocaleString("es-CO")}</div>
+                      </div>
+
+                      <div className="mt-3 flex items-center gap-2">
+                        <button className="btn px-3 py-1" disabled={savingSale} onClick={() => decQty(it.branch_product_id)}>
+                          –
+                        </button>
+                        <div className="w-10 text-center font-bold">{it.qty}</div>
+                        <button className="btn px-3 py-1" disabled={savingSale} onClick={() => incQty(it.branch_product_id)}>
+                          +
+                        </button>
+
+                        <button
+                          className="btn btn-ghost ml-auto px-3 py-1"
+                          disabled={savingSale}
+                          onClick={() => removeItem(it.branch_product_id)}
+                        >
+                          Quitar
+                        </button>
+                      </div>
+                    </div>
+                  ))}
                 </div>
-                <button className="btn" onClick={closePayModal} disabled={savingSale}>
-                  ✕
+              )}
+
+              <div className="my-4 border-t border-gray-200" />
+
+              <TotalsRow label="Subtotal" value={subtotal} />
+              <TotalsRow label="Impuesto" value={taxTotal} />
+              <TotalsRow label="Total" value={total} bold />
+
+              <div className="mt-4 flex gap-2">
+                <button className="btn w-32" disabled={cart.length === 0 || savingSale} onClick={clearCart}>
+                  Vaciar
+                </button>
+                <button className="btn btn-primary flex-1" disabled={cart.length === 0 || savingSale} onClick={openPayModal}>
+                  Cobrar
                 </button>
               </div>
+            </div>
+          </div>
 
-              <div className="card-b space-y-3">
-                <PayInput label="Efectivo" value={cash} setValue={setCash} disabled={savingSale} />
-                <PayInput label="Tarjeta" value={card} setValue={setCard} disabled={savingSale} />
-                <PayInput label="Transferencia" value={transfer} setValue={setTransfer} disabled={savingSale} />
-                <PayInput label="QR" value={qr} setValue={setQr} disabled={savingSale} />
-
-                <div className="text-sm">
-                  <span className="font-bold">Pagos:</span> ${paymentsSum.toLocaleString("es-CO")}
+          {/* MODAL PAGO */}
+          {showPay && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40">
+              <div className="card w-full max-w-md">
+                <div className="card-h flex items-center justify-between">
+                  <div>
+                    <div className="text-lg font-extrabold">Cobrar</div>
+                    <div className="text-sm text-gray-500">
+                      Total a pagar: <span className="font-bold">${total.toLocaleString("es-CO")}</span>
+                    </div>
+                  </div>
+                  <button className="btn" onClick={closePayModal} disabled={savingSale}>
+                    ✕
+                  </button>
                 </div>
 
-                {payError && <div className="alert-err">{payError}</div>}
+                <div className="card-b space-y-3">
+                  {/* ✅ Cliente (antes de confirmar pago) */}
+                  <div className="rounded-2xl border border-gray-200 p-3">
+                    <div className="flex items-center justify-between">
+                      <div className="text-sm font-extrabold">Cliente</div>
+                      <span className="badge">
+                        {selectedCustomer ? selectedCustomer.name : "CONSUMIDOR FINAL"}
+                      </span>
+                    </div>
 
-                <div className="flex gap-2 pt-2">
-                  <button className="btn flex-1" onClick={closePayModal} disabled={savingSale}>
-                    Cancelar
-                  </button>
-                  <button className="btn btn-primary flex-1" onClick={saveSale} disabled={savingSale}>
-                    {savingSale ? "Guardando..." : "Confirmar pago"}
-                  </button>
+                    <div className="mt-2 grid gap-2">
+                      <label className="grid gap-1">
+                        <span className="label">Buscar cliente</span>
+                        <input
+                          className="input"
+                          value={customerSearch}
+                          onChange={(e) => setCustomerSearch(e.target.value)}
+                          placeholder="Nombre, identificación, teléfono, email…"
+                          disabled={savingSale}
+                        />
+                      </label>
+
+                      <div className="rounded-2xl border border-gray-200 overflow-hidden">
+                        <div className="max-h-40 overflow-auto">
+                          {/* Opción consumidor final */}
+                          <button
+                            type="button"
+                            className="w-full text-left px-3 py-2 hover:bg-gray-50 text-sm"
+                            onClick={async () => {
+                              try {
+                                const cf = await ensureConsumidorFinal();
+                                setSelectedCustomerId(cf.id);
+                                setPayError(null);
+                              } catch (e: any) {
+                                setPayError(e?.message ?? "No se pudo seleccionar CONSUMIDOR FINAL.");
+                              }
+                            }}
+                            disabled={savingSale}
+                          >
+                            <div className="font-extrabold">CONSUMIDOR FINAL</div>
+                            <div className="text-xs text-gray-500">Identificación: CF</div>
+                          </button>
+
+                          <div className="border-t border-gray-200" />
+
+                          {filteredCustomers.map((c) => (
+                            <button
+                              key={c.id}
+                              type="button"
+                              className={`w-full text-left px-3 py-2 hover:bg-gray-50 text-sm ${
+                                selectedCustomerId === c.id ? "bg-gray-50" : ""
+                              }`}
+                              onClick={() => {
+                                setSelectedCustomerId(c.id);
+                                setPayError(null);
+                              }}
+                              disabled={savingSale}
+                            >
+                              <div className="font-extrabold">{c.name}</div>
+                              <div className="text-xs text-gray-500">
+                                {c.identification} {c.phone ? `• ${c.phone}` : ""} {c.email ? `• ${c.email}` : ""}
+                              </div>
+                            </button>
+                          ))}
+
+                          {filteredCustomers.length === 0 && (
+                            <div className="px-3 py-3 text-sm text-gray-500">Sin resultados.</div>
+                          )}
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        className="btn"
+                        onClick={() => setCreatingCustomer((v) => !v)}
+                        disabled={savingSale}
+                      >
+                        {creatingCustomer ? "Ocultar crear cliente" : "Crear cliente rápido"}
+                      </button>
+
+                      {creatingCustomer && (
+                        <div className="rounded-2xl border border-gray-200 p-3 space-y-2">
+                          <label className="grid gap-1">
+                            <span className="label">Identificación</span>
+                            <input className="input" value={newCustId} onChange={(e) => setNewCustId(e.target.value)} disabled={savingSale} />
+                          </label>
+
+                          <label className="grid gap-1">
+                            <span className="label">Nombre</span>
+                            <input className="input" value={newCustName} onChange={(e) => setNewCustName(e.target.value)} disabled={savingSale} />
+                          </label>
+
+                          <label className="grid gap-1">
+                            <span className="label">Teléfono (opcional)</span>
+                            <input className="input" value={newCustPhone} onChange={(e) => setNewCustPhone(e.target.value)} disabled={savingSale} />
+                          </label>
+
+                          <label className="grid gap-1">
+                            <span className="label">Email (opcional)</span>
+                            <input className="input" value={newCustEmail} onChange={(e) => setNewCustEmail(e.target.value)} disabled={savingSale} />
+                          </label>
+
+                          <button className="btn btn-primary" onClick={createCustomerQuick} disabled={savingSale}>
+                            Crear cliente
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* pagos */}
+                  <PayInput label="Efectivo" value={cash} setValue={setCash} disabled={savingSale} />
+                  <PayInput label="Tarjeta" value={card} setValue={setCard} disabled={savingSale} />
+                  <PayInput label="Transferencia" value={transfer} setValue={setTransfer} disabled={savingSale} />
+                  <PayInput label="QR" value={qr} setValue={setQr} disabled={savingSale} />
+
+                  <div className="text-sm">
+                    <span className="font-bold">Pagos:</span> ${paymentsSum.toLocaleString("es-CO")}
+                  </div>
+
+                  {payError && <div className="alert-err whitespace-pre-line">{payError}</div>}
+
+                  <div className="flex gap-2 pt-2">
+                    <button className="btn flex-1" onClick={closePayModal} disabled={savingSale}>
+                      Cancelar
+                    </button>
+                    <button className="btn btn-primary flex-1" onClick={saveSale} disabled={savingSale}>
+                      {savingSale ? "Guardando..." : "Confirmar pago"}
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
-        )}
+          )}
 
-        {/* PRINT */}
-
-{printingSaleId && (
-  <PrintPortal>
-    <div className="print-layer">
-      <TicketInline
-        saleId={printingSaleId}
-        onPrinted={() => {
-          setPrintingSaleId(null);
-        }}
-      />
+          {/* PRINT */}
+          {printingSaleId && (
+            <PrintPortal>
+              <div className="print-layer">
+                <TicketInline
+                  saleId={printingSaleId}
+                  onPrinted={() => {
+                    setPrintingSaleId(null);
+                  }}
+                />
+              </div>
+            </PrintPortal>
+          )}
+        </div>
+      </PageShell>
     </div>
-  </PrintPortal>
-)}
-      </div>
-    </PageShell>
-  </div>
-);
+  );
 }
-    
 
 /** ===================== UI helpers ===================== */
 

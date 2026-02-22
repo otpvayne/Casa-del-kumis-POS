@@ -50,6 +50,12 @@ export default function AdminPage() {
       href: "/admin/reports",
       badge: "Análisis",
     },
+    {
+      title: "Modificación impuesto",
+      desc: "Cambia el porcentaje el cual toca sumarle por cada venta",
+      href: "/admin/settings",
+      badge: "Operación",
+    },
   ];
 
   return (
