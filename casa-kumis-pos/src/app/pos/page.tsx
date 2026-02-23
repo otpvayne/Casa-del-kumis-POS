@@ -71,6 +71,8 @@ export default function PosPage() {
 
   // crear cliente rápido
   const [creatingCustomer, setCreatingCustomer] = useState(false);
+  const [isCustomerDropdownOpen, setIsCustomerDropdownOpen] = useState(false);
+const [showCreateCustomer, setShowCreateCustomer] = useState(false);
   const [newCustId, setNewCustId] = useState("");
   const [newCustName, setNewCustName] = useState("");
   const [newCustPhone, setNewCustPhone] = useState("");
@@ -94,16 +96,17 @@ export default function PosPage() {
   };
 
   const loadCustomers = async () => {
-    // Traemos una lista corta (puedes ampliar luego)
-    const { data, error } = await supabase
-      .from("customers")
-      .select("identification,name,phone,email")
-      .order("created_at", { ascending: false })
-      .limit(200);
+  const { data, error } = await supabase
+    .from("customers")
+    .select("id, identification, name, phone, email")
+    .order("created_at", { ascending: false })
+    .limit(200);
 
-    if (error) throw new Error(error.message);
+  if (error) throw new Error(error.message);
 
-    const mapped: Customer[] = (data ?? []).map((c: any) => ({
+  const mapped: Customer[] = (data ?? [])
+    .filter((c: any) => c?.id) // ✅ blindaje (evita undefined)
+    .map((c: any) => ({
       id: String(c.id),
       identification: String(c.identification ?? ""),
       name: String(c.name ?? ""),
@@ -111,16 +114,15 @@ export default function PosPage() {
       email: c.email ? String(c.email) : null,
     }));
 
-    setCustomers(mapped);
+  setCustomers(mapped);
 
-    // Selección default: CONSUMIDOR FINAL si existe
-    const cf =
-      mapped.find((x) => x.identification === "CF") ||
-      mapped.find((x) => x.name?.toUpperCase() === "CONSUMIDOR FINAL");
+  // Default: CONSUMIDOR FINAL si existe
+  const cf =
+    mapped.find((x) => x.identification === "CF") ||
+    mapped.find((x) => x.name?.toUpperCase() === "CONSUMIDOR FINAL");
 
-    if (cf) setSelectedCustomerId(cf.id);
-    else setSelectedCustomerId(null);
-  };
+  setSelectedCustomerId(cf ? cf.id : null);
+};
 
   const ensureConsumidorFinal = async (): Promise<Customer> => {
     // 1) Si ya está en memoria, úsalo
@@ -382,7 +384,8 @@ export default function PosPage() {
     setTransfer("0");
     setQr("0");
     setCustomerSearch("");
-
+    setIsCustomerDropdownOpen(false);
+setShowCreateCustomer(false);
     // Default: Consumidor final (si existe o crearlo)
     try {
       const cf = await ensureConsumidorFinal();
@@ -725,113 +728,160 @@ export default function PosPage() {
 
                 <div className="card-b space-y-3">
                   {/* ✅ Cliente (antes de confirmar pago) */}
-                  <div className="rounded-2xl border border-gray-200 p-3">
-                    <div className="flex items-center justify-between">
-                      <div className="text-sm font-extrabold">Cliente</div>
-                      <span className="badge">
-                        {selectedCustomer ? selectedCustomer.name : "CONSUMIDOR FINAL"}
-                      </span>
-                    </div>
+                  {/* ✅ Cliente (antes de confirmar pago) */}
+<div className="rounded-2xl border border-gray-200 p-3">
+  <div className="flex items-center justify-between">
+    <div className="text-sm font-extrabold">Cliente</div>
+    <span className="badge">
+      {selectedCustomer ? selectedCustomer.name : "CONSUMIDOR FINAL"}
+    </span>
+  </div>
 
-                    <div className="mt-2 grid gap-2">
-                      <label className="grid gap-1">
-                        <span className="label">Buscar cliente</span>
-                        <input
-                          className="input"
-                          value={customerSearch}
-                          onChange={(e) => setCustomerSearch(e.target.value)}
-                          placeholder="Nombre, identificación, teléfono, email…"
-                          disabled={savingSale}
-                        />
-                      </label>
+  {/* Dropdown */}
+  <div className="mt-3 relative">
+    <button
+      type="button"
+      className="btn w-full justify-between"
+      onClick={() => setIsCustomerDropdownOpen((v) => !v)}
+      disabled={savingSale}
+    >
+      <span className="truncate">
+        {selectedCustomer
+          ? `${selectedCustomer.name} (${selectedCustomer.identification})`
+          : "Seleccionar cliente…"}
+      </span>
+      <span className="ml-2 text-gray-500">▾</span>
+    </button>
 
-                      <div className="rounded-2xl border border-gray-200 overflow-hidden">
-                        <div className="max-h-40 overflow-auto">
-                          {/* Opción consumidor final */}
-                          <button
-                            type="button"
-                            className="w-full text-left px-3 py-2 hover:bg-gray-50 text-sm"
-                            onClick={async () => {
-                              try {
-                                const cf = await ensureConsumidorFinal();
-                                setSelectedCustomerId(cf.id);
-                                setPayError(null);
-                              } catch (e: any) {
-                                setPayError(e?.message ?? "No se pudo seleccionar CONSUMIDOR FINAL.");
-                              }
-                            }}
-                            disabled={savingSale}
-                          >
-                            <div className="font-extrabold">CONSUMIDOR FINAL</div>
-                            <div className="text-xs text-gray-500">Identificación: CF</div>
-                          </button>
+    {isCustomerDropdownOpen && (
+      <div className="absolute z-50 mt-2 w-full rounded-2xl border border-gray-200 bg-white shadow-lg overflow-hidden">
+        <div className="p-3 border-b border-gray-200">
+          <label className="grid gap-1">
+            <span className="label">Buscar</span>
+            <input
+              className="input"
+              value={customerSearch}
+              onChange={(e) => setCustomerSearch(e.target.value)}
+              placeholder="Nombre, identificación, teléfono, email…"
+              disabled={savingSale}
+            />
+          </label>
+        </div>
 
-                          <div className="border-t border-gray-200" />
+        <div className="max-h-56 overflow-auto">
+          {/* Consumidor final */}
+          <button
+            type="button"
+            className={`w-full text-left px-3 py-2 hover:bg-gray-50 text-sm ${
+              selectedCustomer?.identification === "CF" ? "bg-gray-50" : ""
+            }`}
+            onClick={async () => {
+              try {
+                const cf = await ensureConsumidorFinal();
+                setSelectedCustomerId(cf.id);
+                setPayError(null);
+                setIsCustomerDropdownOpen(false);
+              } catch (e: any) {
+                setPayError(e?.message ?? "No se pudo seleccionar CONSUMIDOR FINAL.");
+              }
+            }}
+            disabled={savingSale}
+          >
+            <div className="font-extrabold">CONSUMIDOR FINAL</div>
+            <div className="text-xs text-gray-500">Identificación: CF</div>
+          </button>
 
-                          {filteredCustomers.map((c) => (
-                            <button
-                              key={c.id}
-                              type="button"
-                              className={`w-full text-left px-3 py-2 hover:bg-gray-50 text-sm ${
-                                selectedCustomerId === c.id ? "bg-gray-50" : ""
-                              }`}
-                              onClick={() => {
-                                setSelectedCustomerId(c.id);
-                                setPayError(null);
-                              }}
-                              disabled={savingSale}
-                            >
-                              <div className="font-extrabold">{c.name}</div>
-                              <div className="text-xs text-gray-500">
-                                {c.identification} {c.phone ? `• ${c.phone}` : ""} {c.email ? `• ${c.email}` : ""}
-                              </div>
-                            </button>
-                          ))}
+          <div className="border-t border-gray-200" />
 
-                          {filteredCustomers.length === 0 && (
-                            <div className="px-3 py-3 text-sm text-gray-500">Sin resultados.</div>
-                          )}
-                        </div>
-                      </div>
+          {/* Clientes */}
+          {filteredCustomers.map((c) => (
+            <button
+              key={c.id}
+              type="button"
+              className={`w-full text-left px-3 py-2 hover:bg-gray-50 text-sm ${
+                selectedCustomerId === c.id ? "bg-gray-50" : ""
+              }`}
+              onClick={() => {
+                setSelectedCustomerId(c.id);
+                setPayError(null);
+                setIsCustomerDropdownOpen(false);
+              }}
+              disabled={savingSale}
+            >
+              <div className="font-extrabold">{c.name}</div>
+              <div className="text-xs text-gray-500">
+                {c.identification} {c.phone ? `• ${c.phone}` : ""} {c.email ? `• ${c.email}` : ""}
+              </div>
+            </button>
+          ))}
 
-                      <button
-                        type="button"
-                        className="btn"
-                        onClick={() => setCreatingCustomer((v) => !v)}
-                        disabled={savingSale}
-                      >
-                        {creatingCustomer ? "Ocultar crear cliente" : "Crear cliente rápido"}
-                      </button>
+          {filteredCustomers.length === 0 && (
+            <div className="px-3 py-3 text-sm text-gray-500">Sin resultados.</div>
+          )}
+        </div>
 
-                      {creatingCustomer && (
-                        <div className="rounded-2xl border border-gray-200 p-3 space-y-2">
-                          <label className="grid gap-1">
-                            <span className="label">Identificación</span>
-                            <input className="input" value={newCustId} onChange={(e) => setNewCustId(e.target.value)} disabled={savingSale} />
-                          </label>
+        <div className="p-3 border-t border-gray-200">
+          <button
+            type="button"
+            className="btn w-full"
+            onClick={() => setShowCreateCustomer((v) => !v)}
+            disabled={savingSale}
+          >
+            {showCreateCustomer ? "Ocultar crear cliente" : "Crear cliente rápido"}
+          </button>
 
-                          <label className="grid gap-1">
-                            <span className="label">Nombre</span>
-                            <input className="input" value={newCustName} onChange={(e) => setNewCustName(e.target.value)} disabled={savingSale} />
-                          </label>
+          {showCreateCustomer && (
+            <div className="mt-3 rounded-2xl border border-gray-200 p-3 space-y-2">
+              <label className="grid gap-1">
+                <span className="label">Identificación</span>
+                <input
+                  className="input"
+                  value={newCustId}
+                  onChange={(e) => setNewCustId(e.target.value)}
+                  disabled={savingSale}
+                />
+              </label>
 
-                          <label className="grid gap-1">
-                            <span className="label">Teléfono (opcional)</span>
-                            <input className="input" value={newCustPhone} onChange={(e) => setNewCustPhone(e.target.value)} disabled={savingSale} />
-                          </label>
+              <label className="grid gap-1">
+                <span className="label">Nombre</span>
+                <input
+                  className="input"
+                  value={newCustName}
+                  onChange={(e) => setNewCustName(e.target.value)}
+                  disabled={savingSale}
+                />
+              </label>
 
-                          <label className="grid gap-1">
-                            <span className="label">Email (opcional)</span>
-                            <input className="input" value={newCustEmail} onChange={(e) => setNewCustEmail(e.target.value)} disabled={savingSale} />
-                          </label>
+              <label className="grid gap-1">
+                <span className="label">Teléfono (opcional)</span>
+                <input
+                  className="input"
+                  value={newCustPhone}
+                  onChange={(e) => setNewCustPhone(e.target.value)}
+                  disabled={savingSale}
+                />
+              </label>
 
-                          <button className="btn btn-primary" onClick={createCustomerQuick} disabled={savingSale}>
-                            Crear cliente
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  </div>
+              <label className="grid gap-1">
+                <span className="label">Email (opcional)</span>
+                <input
+                  className="input"
+                  value={newCustEmail}
+                  onChange={(e) => setNewCustEmail(e.target.value)}
+                  disabled={savingSale}
+                />
+              </label>
+
+              <button className="btn btn-primary w-full" onClick={createCustomerQuick} disabled={savingSale}>
+                Crear cliente
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    )}
+  </div>
+</div>
 
                   {/* pagos */}
                   <PayInput label="Efectivo" value={cash} setValue={setCash} disabled={savingSale} />
@@ -1028,7 +1078,7 @@ function TicketInline({
       <img src="/logo.png" style={{ width: 120, margin: "0 auto", display: "block" }} />
 
       <div className="center bold">CASA DEL KUMIS</div>
-      <div className="center">NIT: 000000000-0</div>
+      <div className="center">NIT: 901192245-9</div>
       <div className="center">Comprobante interno - No válido DIAN</div>
 
       <div className="line" />
