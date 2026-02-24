@@ -32,7 +32,6 @@ export default function CloseShiftPage() {
   const [closing, setClosing] = useState(false);
   const [okMsg, setOkMsg] = useState<string | null>(null);
 
-  // ✅ NUEVO (modelo correcto): base (opening_cash) + ventas del turno (expected_total ya lo incluye)
   const [openingCash, setOpeningCash] = useState<number>(0);
   const [expectedTotal, setExpectedTotal] = useState<number>(0);
 
@@ -53,7 +52,6 @@ export default function CloseShiftPage() {
   };
 
   const refreshTotals = async (sid: string) => {
-    // RPC informativo (ventas por método + count)
     const { data, error } = await supabase.rpc("get_shift_totals", { p_shift_id: sid });
     if (error) throw new Error(error.message);
     const row = Array.isArray(data) ? data[0] : data;
@@ -67,17 +65,18 @@ export default function CloseShiftPage() {
       sales_count: Number(row.sales_count ?? 0),
     });
 
-    // ✅ Modelo nuevo: expected_total ya incluye opening_cash + ventas acumuladas
+    // ✅ FIX: usar expected_total del RPC (base + ventas reales),
+    // y solo pedir opening_cash de la tabla para mostrar el desglose
     const { data: sh, error: shErr } = await supabase
       .from("shifts")
-      .select("opening_cash, expected_total")
+      .select("opening_cash")
       .eq("id", sid)
       .single();
 
     if (shErr) throw new Error(shErr.message);
 
     setOpeningCash(Number(sh.opening_cash ?? 0));
-    setExpectedTotal(Number(sh.expected_total ?? 0));
+    setExpectedTotal(Number(row.expected_total ?? 0)); // ✅ viene del RPC, no de la tabla
   };
 
   useEffect(() => {
@@ -120,7 +119,6 @@ export default function CloseShiftPage() {
     });
   }, [router]);
 
-  // ✅ esperado final (modelo que te pidieron): base + ventas (ya viene en expected_total)
   const expected = useMemo(() => {
     return Math.round(Number(expectedTotal ?? 0) * 100) / 100;
   }, [expectedTotal]);
@@ -130,7 +128,6 @@ export default function CloseShiftPage() {
     return Math.round(v * 100) / 100;
   }, [expectedTotal, openingCash]);
 
-  // diferencia = confirmado - esperado
   const diff = useMemo(() => {
     const v = toNum(confirmValue);
     return Math.round((v - expected) * 100) / 100;
@@ -149,10 +146,9 @@ export default function CloseShiftPage() {
 
       const value = toNum(confirmValue);
 
-      // ✅ Este RPC debe validar contra expected_total del shift (base + ventas)
       const { error } = await supabase.rpc("close_shift", {
         p_shift_id: shiftId,
-        p_confirmed_total: value, // ahora este valor es TOTAL CONTADO/REGISTRADO (base + ventas)
+        p_confirmed_total: value,
       });
 
       if (error) throw new Error(error.message);
