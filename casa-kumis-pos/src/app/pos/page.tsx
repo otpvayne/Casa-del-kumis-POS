@@ -1,3 +1,7 @@
+// ✅ PEGA ESTO EN: casa-kumis-pos\src\app\pos\page.tsx
+// Reemplaza tu archivo completo por este SOLO si te queda más fácil,
+// o copia/pega por bloques siguiendo los comentarios "PEGA AQUÍ".
+
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -33,6 +37,20 @@ type Customer = {
   name: string;
   phone: string | null;
   email: string | null;
+};
+
+// ✅ NUEVO: Tipos para historial
+type SaleHistoryRow = {
+  id: string;
+  receipt_number: number | null;
+  total: number;
+  created_at: string;
+  customers: { name: string; identification: string } | null;
+};
+
+type PaymentRow = {
+  method: PaymentMethod;
+  amount: number;
 };
 
 export default function PosPage() {
@@ -72,11 +90,21 @@ export default function PosPage() {
   // crear cliente rápido
   const [creatingCustomer, setCreatingCustomer] = useState(false);
   const [isCustomerDropdownOpen, setIsCustomerDropdownOpen] = useState(false);
-const [showCreateCustomer, setShowCreateCustomer] = useState(false);
+  const [showCreateCustomer, setShowCreateCustomer] = useState(false);
+
   const [newCustId, setNewCustId] = useState("");
   const [newCustName, setNewCustName] = useState("");
   const [newCustPhone, setNewCustPhone] = useState("");
   const [newCustEmail, setNewCustEmail] = useState("");
+
+  // =========================
+  // ✅ NUEVO: Historial del turno (modal)
+  // =========================
+  const [showHistory, setShowHistory] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [historySales, setHistorySales] = useState<SaleHistoryRow[]>([]);
+  const [historyPaymentsBySale, setHistoryPaymentsBySale] = useState<Record<string, PaymentRow[]>>({});
 
   const loadTaxRate = async () => {
     try {
@@ -96,42 +124,39 @@ const [showCreateCustomer, setShowCreateCustomer] = useState(false);
   };
 
   const loadCustomers = async () => {
-  const { data, error } = await supabase
-    .from("customers")
-    .select("id, identification, name, phone, email")
-    .order("created_at", { ascending: false })
-    .limit(200);
+    const { data, error } = await supabase
+      .from("customers")
+      .select("id, identification, name, phone, email")
+      .order("created_at", { ascending: false })
+      .limit(200);
 
-  if (error) throw new Error(error.message);
+    if (error) throw new Error(error.message);
 
-  const mapped: Customer[] = (data ?? [])
-    .filter((c: any) => c?.id) // ✅ blindaje (evita undefined)
-    .map((c: any) => ({
-      id: String(c.id),
-      identification: String(c.identification ?? ""),
-      name: String(c.name ?? ""),
-      phone: c.phone ? String(c.phone) : null,
-      email: c.email ? String(c.email) : null,
-    }));
+    const mapped: Customer[] = (data ?? [])
+      .filter((c: any) => c?.id) // ✅ blindaje
+      .map((c: any) => ({
+        id: String(c.id),
+        identification: String(c.identification ?? ""),
+        name: String(c.name ?? ""),
+        phone: c.phone ? String(c.phone) : null,
+        email: c.email ? String(c.email) : null,
+      }));
 
-  setCustomers(mapped);
+    setCustomers(mapped);
 
-  // Default: CONSUMIDOR FINAL si existe
-  const cf =
-    mapped.find((x) => x.identification === "CF") ||
-    mapped.find((x) => x.name?.toUpperCase() === "CONSUMIDOR FINAL");
+    const cf =
+      mapped.find((x) => x.identification === "CF") ||
+      mapped.find((x) => x.name?.toUpperCase() === "CONSUMIDOR FINAL");
 
-  setSelectedCustomerId(cf ? cf.id : null);
-};
+    setSelectedCustomerId(cf ? cf.id : null);
+  };
 
   const ensureConsumidorFinal = async (): Promise<Customer> => {
-    // 1) Si ya está en memoria, úsalo
     const inState =
       customers.find((x) => x.identification === "CF") ||
       customers.find((x) => x.name?.toUpperCase() === "CONSUMIDOR FINAL");
     if (inState) return inState;
 
-    // 2) Buscar en BD
     const { data: existing, error: exErr } = await supabase
       .from("customers")
       .select("id,identification,name,phone,email")
@@ -142,17 +167,15 @@ const [showCreateCustomer, setShowCreateCustomer] = useState(false);
     if (exErr) throw new Error(exErr.message);
 
     if (existing?.id) {
-      const c: Customer = {
+      return {
         id: String(existing.id),
         identification: String(existing.identification ?? "CF"),
         name: String(existing.name ?? "CONSUMIDOR FINAL"),
         phone: existing.phone ? String(existing.phone) : null,
         email: existing.email ? String(existing.email) : null,
       };
-      return c;
     }
 
-    // 3) Crear CONSUMIDOR FINAL
     const { data: created, error: cErr } = await supabase
       .from("customers")
       .insert({
@@ -166,15 +189,13 @@ const [showCreateCustomer, setShowCreateCustomer] = useState(false);
 
     if (cErr || !created) throw new Error(cErr?.message ?? "No se pudo crear CONSUMIDOR FINAL.");
 
-    const cf: Customer = {
+    return {
       id: String(created.id),
       identification: String(created.identification ?? "CF"),
       name: String(created.name ?? "CONSUMIDOR FINAL"),
       phone: created.phone ? String(created.phone) : null,
       email: created.email ? String(created.email) : null,
     };
-
-    return cf;
   };
 
   const createCustomerQuick = async () => {
@@ -212,13 +233,14 @@ const [showCreateCustomer, setShowCreateCustomer] = useState(false);
       setCustomers((prev) => [created, ...prev].slice(0, 200));
       setSelectedCustomerId(created.id);
 
-      // reset form
       setNewCustId("");
       setNewCustName("");
       setNewCustPhone("");
       setNewCustEmail("");
 
       setSaleOkMsg("Cliente creado ✅");
+      setShowCreateCustomer(false);
+      setIsCustomerDropdownOpen(false);
     } catch (e: any) {
       setPayError(e?.message ?? "No se pudo crear el cliente.");
     } finally {
@@ -243,11 +265,9 @@ const [showCreateCustomer, setShowCreateCustomer] = useState(false);
 
       setBranchId(id);
 
-      // ✅ traer nombre de sucursal
       const { data: bRow } = await supabase.from("branches").select("name").eq("id", id).maybeSingle();
       if (bRow?.name) setBranchName(String(bRow.name));
 
-      // ✅ turno abierto
       const { data: shift, error: shiftErr } = await supabase
         .from("shifts")
         .select("id,status,opened_at")
@@ -261,14 +281,11 @@ const [showCreateCustomer, setShowCreateCustomer] = useState(false);
       setShiftId(shift.id);
       setShiftOpenedAt(shift.opened_at ? String(shift.opened_at) : null);
 
-      // ✅ impuesto global desde app_settings
       const rate = await loadTaxRate();
       setTaxRate(rate);
 
-      // ✅ clientes (para seleccionar en cobro)
       await loadCustomers();
 
-      // ✅ productos + imagen
       const { data: rows, error: prodErr } = await supabase
         .from("branch_products")
         .select("id, product_id, price, is_favorite, products(name,image_url)")
@@ -385,16 +402,13 @@ const [showCreateCustomer, setShowCreateCustomer] = useState(false);
     setQr("0");
     setCustomerSearch("");
     setIsCustomerDropdownOpen(false);
-setShowCreateCustomer(false);
-    // Default: Consumidor final (si existe o crearlo)
+    setShowCreateCustomer(false);
+
     try {
       const cf = await ensureConsumidorFinal();
       setSelectedCustomerId(cf.id);
-
-      // refrescar lista por si lo acabamos de crear
       await loadCustomers();
     } catch {
-      // si falla, al menos no bloqueamos el cobro
       setSelectedCustomerId(null);
     }
 
@@ -428,6 +442,87 @@ setShowCreateCustomer(false);
     if (!selectedCustomerId) return null;
     return customers.find((c) => c.id === selectedCustomerId) ?? null;
   }, [customers, selectedCustomerId]);
+
+  // =========================
+  // ✅ NUEVO: cargar historial del turno
+  // =========================
+  const loadShiftHistory = async () => {
+    if (!shiftId) return;
+
+    setHistoryError(null);
+    setHistoryLoading(true);
+
+    try {
+      // 1) Ventas del turno (blindaje por branch_id también)
+      const { data: salesRows, error: salesErr } = await supabase
+        .from("sales")
+        .select("id, receipt_number, total, created_at, customer_id, shift_id, branch_id, customers(name,identification)")
+        .eq("shift_id", shiftId)
+        .eq("branch_id", branchId) // ✅ evita cruces de sucursal
+        .order("created_at", { ascending: false })
+        .limit(80);
+
+      if (salesErr) throw new Error(salesErr.message);
+
+      const mappedSales: SaleHistoryRow[] = (salesRows ?? []).map((s: any) => ({
+        id: String(s.id),
+        receipt_number: s.receipt_number ?? null,
+        total: Number(s.total ?? 0),
+        created_at: String(s.created_at),
+        customers: s.customers
+          ? { name: String(s.customers.name ?? ""), identification: String(s.customers.identification ?? "") }
+          : null,
+      }));
+
+      setHistorySales(mappedSales);
+
+      // 2) Pagos de esas ventas
+      const saleIds = mappedSales.map((s) => s.id);
+      if (saleIds.length === 0) {
+        setHistoryPaymentsBySale({});
+        setHistoryLoading(false);
+        return;
+      }
+
+      const { data: payRows, error: payErr } = await supabase
+        .from("payments")
+        .select("sale_id, method, amount")
+        .in("sale_id", saleIds);
+
+      if (payErr) throw new Error(payErr.message);
+
+      const grouped: Record<string, PaymentRow[]> = {};
+      (payRows ?? []).forEach((p: any) => {
+        const sid = String(p.sale_id);
+        if (!grouped[sid]) grouped[sid] = [];
+        grouped[sid].push({
+          method: p.method as PaymentMethod,
+          amount: Number(p.amount ?? 0),
+        });
+      });
+
+      setHistoryPaymentsBySale(grouped);
+      setHistoryLoading(false);
+    } catch (e: any) {
+      setHistoryLoading(false);
+      setHistoryError(e?.message ?? "No se pudo cargar el historial.");
+    }
+  };
+
+  const openHistoryModal = async () => {
+    setShowHistory(true);
+    await loadShiftHistory();
+  };
+
+  const closeHistoryModal = () => setShowHistory(false);
+
+  const methodLabel = (m: string) => {
+    if (m === "CASH") return "EFECTIVO";
+    if (m === "CARD") return "TARJETA";
+    if (m === "TRANSFER") return "TRANSFER";
+    if (m === "QR") return "QR";
+    return m;
+  };
 
   const saveSale = async () => {
     if (!branchId || !shiftId) return;
@@ -465,7 +560,6 @@ setShowCreateCustomer(false);
       return;
     }
 
-    // ✅ Cliente obligatorio: si no hay seleccionado, usamos Consumidor Final
     let customerId = selectedCustomerId;
     try {
       if (!customerId) {
@@ -473,17 +567,15 @@ setShowCreateCustomer(false);
         customerId = cf.id;
       }
     } catch {
-      // si falla, queda null (pero no debería)
       customerId = selectedCustomerId;
     }
 
-    // ✅ Insert venta (incluye customer_id)
     const { data: saleRow, error: saleErr } = await supabase
       .from("sales")
       .insert({
         branch_id: branchId,
         shift_id: shiftId,
-        customer_id: customerId, // 👈 IMPORTANT
+        customer_id: customerId,
         subtotal,
         tax_total: taxTotal,
         total,
@@ -493,17 +585,7 @@ setShowCreateCustomer(false);
 
     if (saleErr || !saleRow) {
       setSavingSale(false);
-
-      // mensaje útil si no existe customer_id en sales
-      const msg = saleErr?.message ?? "Error creando venta.";
-      if (msg.toLowerCase().includes("customer_id")) {
-        setPayError(
-          `Tu tabla sales no tiene la columna customer_id.\n\nSolución rápida (SQL):\nALTER TABLE sales ADD COLUMN customer_id uuid NULL REFERENCES customers(id);\n\nLuego vuelve a intentar.`
-        );
-        return;
-      }
-
-      setPayError(msg);
+      setPayError(saleErr?.message ?? "Error creando venta.");
       return;
     }
 
@@ -537,35 +619,34 @@ setShowCreateCustomer(false);
       return;
     }
 
-    // ✅ Acumular SOLO efectivo en el turno (opening_cash + ventas CASH)
-// ✅ Modelo nuevo: expected_total = opening_cash + SUM(ventas.total del turno)
-// Entonces por cada venta sumamos el TOTAL de la venta (sin importar método de pago).
-const { data: shiftRow, error: shGetErr } = await supabase
-  .from("shifts")
-  .select("expected_total")
-  .eq("id", shiftId)
-  .single();
+    // ✅ Actualizar expected_cash SOLO con lo pagado en efectivo
+    const cashPaid = c;
 
-if (shGetErr) {
-  setSavingSale(false);
-  setPayError(shGetErr.message);
-  return;
-}
+    const { data: shiftRow, error: shGetErr } = await supabase
+      .from("shifts")
+      .select("expected_cash")
+      .eq("id", shiftId)
+      .single();
 
-const currentExpectedTotal = Number(shiftRow.expected_total ?? 0);
-const newExpectedTotal = Math.round((currentExpectedTotal + total) * 100) / 100;
+    if (shGetErr) {
+      setSavingSale(false);
+      setPayError(shGetErr.message);
+      return;
+    }
 
-const { error: shUpdErr } = await supabase
-  .from("shifts")
-  .update({ expected_total: newExpectedTotal })
-  .eq("id", shiftId);
+    const currentExpectedCash = Number(shiftRow.expected_cash ?? 0);
+    const newExpectedCash = Math.round((currentExpectedCash + cashPaid) * 100) / 100;
 
-if (shUpdErr) {
-  setSavingSale(false);
-  setPayError(shUpdErr.message);
-  return;
-}
+    const { error: shUpdErr } = await supabase
+      .from("shifts")
+      .update({ expected_cash: newExpectedCash })
+      .eq("id", shiftId);
 
+    if (shUpdErr) {
+      setSavingSale(false);
+      setPayError(shUpdErr.message);
+      return;
+    }
 
     setSavingSale(false);
     setShowPay(false);
@@ -573,6 +654,11 @@ if (shUpdErr) {
     setSaleOkMsg(`Venta guardada ✅ (Comprobante: ${String(saleId).slice(0, 8).toUpperCase()})`);
     setPrintingSaleId(saleId);
     sessionStorage.removeItem(`cart_${branchId}`);
+
+    // ✅ opcional: si el historial está abierto, refrescarlo automáticamente
+    if (showHistory) {
+      await loadShiftHistory();
+    }
   };
 
   if (loading) return <LoadingCard title="Cargando POS..." />;
@@ -588,7 +674,6 @@ if (shUpdErr) {
               <div className="mt-1 text-3xl font-black tracking-tight text-gray-900">Punto de venta</div>
             </div>
 
-            {/* Estado visual sutil */}
             <div className="hidden sm:flex items-center gap-2 rounded-full border border-gray-200 bg-white px-3 py-2 shadow-sm">
               <span className="h-2 w-2 rounded-full bg-emerald-500" />
               <span className="text-xs font-semibold text-gray-700">Activo</span>
@@ -637,21 +722,28 @@ if (shUpdErr) {
                 <div className="text-xs text-gray-500">{cart.length ? `${cart.length} ítem(s)` : "Vacío"}</div>
               </div>
 
-              {shiftId && (
-                <button
-                  className="btn"
-                  onClick={() => {
-                    if (cart.length > 0) {
-                      alert("No puedes cerrar turno con productos en el carrito. Finaliza la venta o vacía el carrito.");
-                      return;
-                    }
-                    router.push("/close-shift");
-                  }}
-                  disabled={savingSale}
-                >
-                  Cerrar turno
+              {/* ✅ NUEVO: botones utilitarios */}
+              <div className="flex gap-2">
+                <button className="btn" onClick={openHistoryModal} disabled={!shiftId || savingSale}>
+                  Historial
                 </button>
-              )}
+
+                {shiftId && (
+                  <button
+                    className="btn"
+                    onClick={() => {
+                      if (cart.length > 0) {
+                        alert("No puedes cerrar turno con productos en el carrito. Finaliza la venta o vacía el carrito.");
+                        return;
+                      }
+                      router.push("/close-shift");
+                    }}
+                    disabled={savingSale}
+                  >
+                    Cerrar turno
+                  </button>
+                )}
+              </div>
             </div>
 
             <div className="card-b">
@@ -721,10 +813,100 @@ if (shUpdErr) {
             </div>
           </div>
 
+          {/* MODAL HISTORIAL */}
+          {showHistory && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40">
+              <div className="card w-full max-w-2xl max-h-[85vh] flex flex-col">
+                <div className="card-h flex items-center justify-between">
+                  <div>
+                    <div className="text-lg font-extrabold">Historial del turno</div>
+                    <div className="text-sm text-gray-500">Ventas registradas en esta sucursal (informativo)</div>
+                  </div>
+
+                  <div className="flex gap-2">
+                    <button className="btn" onClick={loadShiftHistory} disabled={historyLoading}>
+                      {historyLoading ? "Cargando..." : "Refrescar"}
+                    </button>
+                    <button className="btn" onClick={closeHistoryModal}>
+                      ✕
+                    </button>
+                  </div>
+                </div>
+
+                <div className="card-b flex-1 overflow-auto space-y-3">
+                  {historyError && <div className="alert-err whitespace-pre-line">{historyError}</div>}
+
+                  {/* Resumen */}
+                  <div className="rounded-2xl border border-gray-200 p-3 bg-white">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="text-sm">
+                        <span className="font-extrabold">Ventas:</span> {historySales.length}
+                      </div>
+                      <div className="text-sm">
+                        <span className="font-extrabold">Total vendido:</span>{" "}
+                        ${historySales.reduce((acc, s) => acc + Number(s.total ?? 0), 0).toLocaleString("es-CO")}
+                      </div>
+                    </div>
+                    <div className="mt-1 text-xs text-gray-500">
+                      Nota: el cierre de caja valida contra efectivo (base + ventas CASH), no contra medios electrónicos.
+                    </div>
+                  </div>
+
+                  {historyLoading ? (
+                    <div className="text-sm text-gray-500">Cargando historial…</div>
+                  ) : historySales.length === 0 ? (
+                    <div className="text-sm text-gray-500">Aún no hay ventas en este turno.</div>
+                  ) : (
+                    <div className="space-y-2">
+                      {historySales.map((s) => {
+                        const receipt = s.receipt_number
+                          ? `LF-${String(s.receipt_number).padStart(6, "0")}`
+                          : String(s.id).slice(0, 8).toUpperCase();
+
+                        const dt = new Date(s.created_at);
+                        const time = dt.toLocaleTimeString("es-CO", { hour: "2-digit", minute: "2-digit" });
+
+                        const pays = historyPaymentsBySale[s.id] ?? [];
+                        const payText =
+                          pays.length === 0
+                            ? "Sin pagos"
+                            : pays
+                                .map((p) => `${methodLabel(p.method)} $${Number(p.amount).toLocaleString("es-CO")}`)
+                                .join(" • ");
+
+                        const custText = s.customers?.name
+                          ? `${s.customers.name}${s.customers.identification ? ` (${s.customers.identification})` : ""}`
+                          : "CONSUMIDOR FINAL";
+
+                        return (
+                          <div key={s.id} className="rounded-2xl border border-gray-200 p-3">
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <div className="text-sm font-extrabold truncate">
+                                  {time} • {receipt}
+                                </div>
+                                <div className="text-xs text-gray-500 truncate">{custText}</div>
+                                <div className="mt-1 text-xs text-gray-600">{payText}</div>
+                              </div>
+
+                              <div className="text-sm font-extrabold whitespace-nowrap">
+                                ${Number(s.total).toLocaleString("es-CO")}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* MODAL PAGO */}
           {showPay && (
             <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40">
-              <div className="card w-full max-w-md">
+              <div className="card w-full max-w-md max-h-[85vh] flex flex-col">
                 <div className="card-h flex items-center justify-between">
                   <div>
                     <div className="text-lg font-extrabold">Cobrar</div>
@@ -737,164 +919,135 @@ if (shUpdErr) {
                   </button>
                 </div>
 
-                <div className="card-b space-y-3">
-                  {/* ✅ Cliente (antes de confirmar pago) */}
-                  {/* ✅ Cliente (antes de confirmar pago) */}
-<div className="rounded-2xl border border-gray-200 p-3">
-  <div className="flex items-center justify-between">
-    <div className="text-sm font-extrabold">Cliente</div>
-    <span className="badge">
-      {selectedCustomer ? selectedCustomer.name : "CONSUMIDOR FINAL"}
-    </span>
-  </div>
+                {/* ✅ scroll interno para que NO se corte */}
+                <div className="card-b space-y-3 flex-1 overflow-auto">
+                  <div className="rounded-2xl border border-gray-200 p-3">
+                    <div className="flex items-center justify-between">
+                      <div className="text-sm font-extrabold">Cliente</div>
+                      <span className="badge">{selectedCustomer ? selectedCustomer.name : "CONSUMIDOR FINAL"}</span>
+                    </div>
 
-  {/* Dropdown */}
-  <div className="mt-3 relative">
-    <button
-      type="button"
-      className="btn w-full justify-between"
-      onClick={() => setIsCustomerDropdownOpen((v) => !v)}
-      disabled={savingSale}
-    >
-      <span className="truncate">
-        {selectedCustomer
-          ? `${selectedCustomer.name} (${selectedCustomer.identification})`
-          : "Seleccionar cliente…"}
-      </span>
-      <span className="ml-2 text-gray-500">▾</span>
-    </button>
+                    <div className="mt-3 relative">
+                      <button
+                        type="button"
+                        className="btn w-full justify-between"
+                        onClick={() => setIsCustomerDropdownOpen((v) => !v)}
+                        disabled={savingSale}
+                      >
+                        <span className="truncate">
+                          {selectedCustomer ? `${selectedCustomer.name} (${selectedCustomer.identification})` : "Seleccionar cliente…"}
+                        </span>
+                        <span className="ml-2 text-gray-500">▾</span>
+                      </button>
 
-    {isCustomerDropdownOpen && (
-      <div className="absolute z-50 mt-2 w-full rounded-2xl border border-gray-200 bg-white shadow-lg overflow-hidden">
-        <div className="p-3 border-b border-gray-200">
-          <label className="grid gap-1">
-            <span className="label">Buscar</span>
-            <input
-              className="input"
-              value={customerSearch}
-              onChange={(e) => setCustomerSearch(e.target.value)}
-              placeholder="Nombre, identificación, teléfono, email…"
-              disabled={savingSale}
-            />
-          </label>
-        </div>
+                      {isCustomerDropdownOpen && (
+                        <div className="absolute z-50 mt-2 w-full rounded-2xl border border-gray-200 bg-white shadow-lg overflow-hidden">
+                          <div className="p-3 border-b border-gray-200">
+                            <label className="grid gap-1">
+                              <span className="label">Buscar</span>
+                              <input
+                                className="input"
+                                value={customerSearch}
+                                onChange={(e) => setCustomerSearch(e.target.value)}
+                                placeholder="Nombre, identificación, teléfono, email…"
+                                disabled={savingSale}
+                              />
+                            </label>
+                          </div>
 
-        <div className="max-h-56 overflow-auto">
-          {/* Consumidor final */}
-          <button
-            type="button"
-            className={`w-full text-left px-3 py-2 hover:bg-gray-50 text-sm ${
-              selectedCustomer?.identification === "CF" ? "bg-gray-50" : ""
-            }`}
-            onClick={async () => {
-              try {
-                const cf = await ensureConsumidorFinal();
-                setSelectedCustomerId(cf.id);
-                setPayError(null);
-                setIsCustomerDropdownOpen(false);
-              } catch (e: any) {
-                setPayError(e?.message ?? "No se pudo seleccionar CONSUMIDOR FINAL.");
-              }
-            }}
-            disabled={savingSale}
-          >
-            <div className="font-extrabold">CONSUMIDOR FINAL</div>
-            <div className="text-xs text-gray-500">Identificación: CF</div>
-          </button>
+                          <div className="max-h-56 overflow-auto">
+                            <button
+                              type="button"
+                              className={`w-full text-left px-3 py-2 hover:bg-gray-50 text-sm ${
+                                selectedCustomer?.identification === "CF" ? "bg-gray-50" : ""
+                              }`}
+                              onClick={async () => {
+                                try {
+                                  const cf = await ensureConsumidorFinal();
+                                  setSelectedCustomerId(cf.id);
+                                  setPayError(null);
+                                  setIsCustomerDropdownOpen(false);
+                                } catch (e: any) {
+                                  setPayError(e?.message ?? "No se pudo seleccionar CONSUMIDOR FINAL.");
+                                }
+                              }}
+                              disabled={savingSale}
+                            >
+                              <div className="font-extrabold">CONSUMIDOR FINAL</div>
+                              <div className="text-xs text-gray-500">Identificación: CF</div>
+                            </button>
 
-          <div className="border-t border-gray-200" />
+                            <div className="border-t border-gray-200" />
 
-          {/* Clientes */}
-          {filteredCustomers.map((c) => (
-            <button
-              key={c.id}
-              type="button"
-              className={`w-full text-left px-3 py-2 hover:bg-gray-50 text-sm ${
-                selectedCustomerId === c.id ? "bg-gray-50" : ""
-              }`}
-              onClick={() => {
-                setSelectedCustomerId(c.id);
-                setPayError(null);
-                setIsCustomerDropdownOpen(false);
-              }}
-              disabled={savingSale}
-            >
-              <div className="font-extrabold">{c.name}</div>
-              <div className="text-xs text-gray-500">
-                {c.identification} {c.phone ? `• ${c.phone}` : ""} {c.email ? `• ${c.email}` : ""}
-              </div>
-            </button>
-          ))}
+                            {filteredCustomers.map((c) => (
+                              <button
+                                key={c.id}
+                                type="button"
+                                className={`w-full text-left px-3 py-2 hover:bg-gray-50 text-sm ${
+                                  selectedCustomerId === c.id ? "bg-gray-50" : ""
+                                }`}
+                                onClick={() => {
+                                  setSelectedCustomerId(c.id);
+                                  setPayError(null);
+                                  setIsCustomerDropdownOpen(false);
+                                }}
+                                disabled={savingSale}
+                              >
+                                <div className="font-extrabold">{c.name}</div>
+                                <div className="text-xs text-gray-500">
+                                  {c.identification} {c.phone ? `• ${c.phone}` : ""} {c.email ? `• ${c.email}` : ""}
+                                </div>
+                              </button>
+                            ))}
 
-          {filteredCustomers.length === 0 && (
-            <div className="px-3 py-3 text-sm text-gray-500">Sin resultados.</div>
-          )}
-        </div>
+                            {filteredCustomers.length === 0 && (
+                              <div className="px-3 py-3 text-sm text-gray-500">Sin resultados.</div>
+                            )}
+                          </div>
 
-        <div className="p-3 border-t border-gray-200">
-          <button
-            type="button"
-            className="btn w-full"
-            onClick={() => setShowCreateCustomer((v) => !v)}
-            disabled={savingSale}
-          >
-            {showCreateCustomer ? "Ocultar crear cliente" : "Crear cliente rápido"}
-          </button>
+                          <div className="p-3 border-t border-gray-200">
+                            <button
+                              type="button"
+                              className="btn w-full"
+                              onClick={() => setShowCreateCustomer((v) => !v)}
+                              disabled={savingSale || creatingCustomer}
+                            >
+                              {showCreateCustomer ? "Ocultar crear cliente" : "Crear cliente rápido"}
+                            </button>
 
-          {showCreateCustomer && (
-            <div className="mt-3 rounded-2xl border border-gray-200 p-3 space-y-2">
-              <label className="grid gap-1">
-                <span className="label">Identificación</span>
-                <input
-                  className="input"
-                  value={newCustId}
-                  onChange={(e) => setNewCustId(e.target.value)}
-                  disabled={savingSale}
-                />
-              </label>
+                            {showCreateCustomer && (
+                              <div className="mt-3 rounded-2xl border border-gray-200 p-3 space-y-2">
+                                <label className="grid gap-1">
+                                  <span className="label">Identificación</span>
+                                  <input className="input" value={newCustId} onChange={(e) => setNewCustId(e.target.value)} disabled={savingSale} />
+                                </label>
 
-              <label className="grid gap-1">
-                <span className="label">Nombre</span>
-                <input
-                  className="input"
-                  value={newCustName}
-                  onChange={(e) => setNewCustName(e.target.value)}
-                  disabled={savingSale}
-                />
-              </label>
+                                <label className="grid gap-1">
+                                  <span className="label">Nombre</span>
+                                  <input className="input" value={newCustName} onChange={(e) => setNewCustName(e.target.value)} disabled={savingSale} />
+                                </label>
 
-              <label className="grid gap-1">
-                <span className="label">Teléfono (opcional)</span>
-                <input
-                  className="input"
-                  value={newCustPhone}
-                  onChange={(e) => setNewCustPhone(e.target.value)}
-                  disabled={savingSale}
-                />
-              </label>
+                                <label className="grid gap-1">
+                                  <span className="label">Teléfono (opcional)</span>
+                                  <input className="input" value={newCustPhone} onChange={(e) => setNewCustPhone(e.target.value)} disabled={savingSale} />
+                                </label>
 
-              <label className="grid gap-1">
-                <span className="label">Email (opcional)</span>
-                <input
-                  className="input"
-                  value={newCustEmail}
-                  onChange={(e) => setNewCustEmail(e.target.value)}
-                  disabled={savingSale}
-                />
-              </label>
+                                <label className="grid gap-1">
+                                  <span className="label">Email (opcional)</span>
+                                  <input className="input" value={newCustEmail} onChange={(e) => setNewCustEmail(e.target.value)} disabled={savingSale} />
+                                </label>
 
-              <button className="btn btn-primary w-full" onClick={createCustomerQuick} disabled={savingSale}>
-                Crear cliente
-              </button>
-            </div>
-          )}
-        </div>
-      </div>
-    )}
-  </div>
-</div>
+                                <button className="btn btn-primary w-full" onClick={createCustomerQuick} disabled={savingSale || creatingCustomer}>
+                                  {creatingCustomer ? "Creando..." : "Crear cliente"}
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
 
-                  {/* pagos */}
                   <PayInput label="Efectivo" value={cash} setValue={setCash} disabled={savingSale} />
                   <PayInput label="Tarjeta" value={card} setValue={setCard} disabled={savingSale} />
                   <PayInput label="Transferencia" value={transfer} setValue={setTransfer} disabled={savingSale} />
