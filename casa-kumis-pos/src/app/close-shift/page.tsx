@@ -5,9 +5,9 @@ import { supabase } from "@/lib/supabaseClient";
 import { useRouter } from "next/navigation";
 import PageShell from "@/components/PageShell";
 import LoadingCard from "@/components/LoadingCard";
+
 type Totals = {
   shift_id: string;
-  expected_total: number;
   cash_total: number;
   card_total: number;
   transfer_total: number;
@@ -21,7 +21,6 @@ export default function CloseShiftPage() {
   const [branchId, setBranchId] = useState<string | null>(null);
   const [shiftId, setShiftId] = useState<string | null>(null);
 
-  // ✅ NUEVO: nombre de sucursal y hora de apertura (para mostrarlo bien al usuario)
   const [branchName, setBranchName] = useState<string>("");
   const [shiftOpenedAt, setShiftOpenedAt] = useState<string | null>(null);
 
@@ -33,6 +32,10 @@ export default function CloseShiftPage() {
   const [closing, setClosing] = useState(false);
   const [okMsg, setOkMsg] = useState<string | null>(null);
 
+  // ✅ NUEVO (modelo correcto): base (opening_cash) + ventas del turno (expected_total ya lo incluye)
+  const [openingCash, setOpeningCash] = useState<number>(0);
+  const [expectedTotal, setExpectedTotal] = useState<number>(0);
+
   const toNum = (v: string) => {
     if (!v) return 0;
     let cleaned = v.trim().replace(/\./g, "").replace(",", ".");
@@ -40,7 +43,6 @@ export default function CloseShiftPage() {
     return Number.isNaN(n) ? 0 : n;
   };
 
-  // ✅ NUEVO: formatear "Abierto 09:55 a. m."
   const formatShiftOpenedAt = (openedAt: string | null) => {
     if (!openedAt) return "Abierto -";
     const t = new Date(openedAt).toLocaleTimeString("es-CO", {
@@ -51,19 +53,31 @@ export default function CloseShiftPage() {
   };
 
   const refreshTotals = async (sid: string) => {
+    // RPC informativo (ventas por método + count)
     const { data, error } = await supabase.rpc("get_shift_totals", { p_shift_id: sid });
     if (error) throw new Error(error.message);
     const row = Array.isArray(data) ? data[0] : data;
 
     setTotals({
       shift_id: row.shift_id,
-      expected_total: Number(row.expected_total ?? 0),
       cash_total: Number(row.cash_total ?? 0),
       card_total: Number(row.card_total ?? 0),
       transfer_total: Number(row.transfer_total ?? 0),
       qr_total: Number(row.qr_total ?? 0),
       sales_count: Number(row.sales_count ?? 0),
     });
+
+    // ✅ Modelo nuevo: expected_total ya incluye opening_cash + ventas acumuladas
+    const { data: sh, error: shErr } = await supabase
+      .from("shifts")
+      .select("opening_cash, expected_total")
+      .eq("id", sid)
+      .single();
+
+    if (shErr) throw new Error(shErr.message);
+
+    setOpeningCash(Number(sh.opening_cash ?? 0));
+    setExpectedTotal(Number(sh.expected_total ?? 0));
   };
 
   useEffect(() => {
@@ -75,7 +89,6 @@ export default function CloseShiftPage() {
       if (!id) return router.replace("/select-branch");
       setBranchId(id);
 
-      // ✅ NUEVO: traer nombre de sucursal
       const { data: branchRow } = await supabase
         .from("branches")
         .select("name")
@@ -84,7 +97,6 @@ export default function CloseShiftPage() {
 
       setBranchName(branchRow?.name ?? "");
 
-      // ✅ MOD: traer opened_at para mostrar hora de apertura
       const { data: shift, error: shiftErr } = await supabase
         .from("shifts")
         .select("id,status,opened_at")
@@ -99,7 +111,6 @@ export default function CloseShiftPage() {
       setShiftOpenedAt(shift.opened_at ?? null);
 
       await refreshTotals(shift.id);
-
       setLoading(false);
     };
 
@@ -109,7 +120,15 @@ export default function CloseShiftPage() {
     });
   }, [router]);
 
-  const expected = useMemo(() => totals?.expected_total ?? 0, [totals]);
+  // ✅ esperado final (modelo que te pidieron): base + ventas (ya viene en expected_total)
+  const expected = useMemo(() => {
+    return Math.round(Number(expectedTotal ?? 0) * 100) / 100;
+  }, [expectedTotal]);
+
+  const salesOnly = useMemo(() => {
+    const v = Number(expectedTotal ?? 0) - Number(openingCash ?? 0);
+    return Math.round(v * 100) / 100;
+  }, [expectedTotal, openingCash]);
 
   // diferencia = confirmado - esperado
   const diff = useMemo(() => {
@@ -130,9 +149,10 @@ export default function CloseShiftPage() {
 
       const value = toNum(confirmValue);
 
+      // ✅ Este RPC debe validar contra expected_total del shift (base + ventas)
       const { error } = await supabase.rpc("close_shift", {
         p_shift_id: shiftId,
-        p_confirmed_total: value,
+        p_confirmed_total: value, // ahora este valor es TOTAL CONTADO/REGISTRADO (base + ventas)
       });
 
       if (error) throw new Error(error.message);
@@ -148,7 +168,7 @@ export default function CloseShiftPage() {
   };
 
   if (loading) return <LoadingCard title="Cargando POS..." />;
-  if (err) return <div className="container py-6 text-red-600">Error: {err}</div>;
+  if (err && !totals) return <div className="container py-6 text-red-600">Error: {err}</div>;
   if (!totals) return <div className="container py-6">Sin datos de turno.</div>;
 
   const diffLabel = diffOk ? "Cuadra" : diff > 0 ? "Sobra" : "Falta";
@@ -161,15 +181,10 @@ export default function CloseShiftPage() {
             <div className="min-w-0">
               <h1 className="text-2xl font-extrabold tracking-tight">Cierre de turno</h1>
 
-              {/* ✅ SOLO CAMBIÉ ESTA PARTE: ahora se ve como "Sucursal Centro • Abierto 09:55 a. m." */}
               <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-gray-600">
-                <span className="badge">
-                  {branchName || "Sucursal"}
-                </span>
+                <span className="badge">{branchName || "Sucursal"}</span>
                 <span className="text-gray-300">•</span>
-                <span className="badge">
-                  {formatShiftOpenedAt(shiftOpenedAt)}
-                </span>
+                <span className="badge">{formatShiftOpenedAt(shiftOpenedAt)}</span>
               </div>
             </div>
 
@@ -184,10 +199,18 @@ export default function CloseShiftPage() {
             <div className="card-h">
               <div className="flex items-center justify-between">
                 <div>
-                  <div className="text-sm text-gray-500">Total esperado según ventas</div>
+                  <div className="text-sm text-gray-500">Total esperado (base + ventas del turno)</div>
                   <div className="mt-1 text-3xl font-extrabold tracking-tight">
                     ${expected.toLocaleString("es-CO")}
                   </div>
+
+                  <div className="mt-2 text-xs text-gray-500">
+                    Base: <span className="font-bold text-gray-800">${openingCash.toLocaleString("es-CO")}</span>
+                    {"  "}•{"  "}
+                    Ventas turno:{" "}
+                    <span className="font-bold text-gray-800">${salesOnly.toLocaleString("es-CO")}</span>
+                  </div>
+
                   <div className="mt-2 text-xs text-gray-500">
                     Ventas registradas:{" "}
                     <span className="font-bold text-gray-800">{totals.sales_count}</span>
@@ -205,15 +228,15 @@ export default function CloseShiftPage() {
             </div>
 
             <div className="card-b space-y-4">
-              {/* Desglose */}
+              {/* Desglose (informativo) */}
               <div className="rounded-2xl border border-gray-200 p-4">
                 <div className="mb-3 flex items-center justify-between">
-                  <div className="text-sm font-extrabold">Desglose por método</div>
+                  <div className="text-sm font-extrabold">Ventas por método (informativo)</div>
                   <span className="badge">Auto</span>
                 </div>
 
                 <div className="space-y-2">
-                  <Row label="Efectivo" value={totals.cash_total} />
+                  <Row label="Efectivo (CASH)" value={totals.cash_total} />
                   <Row label="Tarjeta" value={totals.card_total} />
                   <Row label="Transferencia" value={totals.transfer_total} />
                   <Row label="QR" value={totals.qr_total} />
@@ -224,7 +247,7 @@ export default function CloseShiftPage() {
               <div className="rounded-2xl border border-gray-200 p-4">
                 <div className="text-sm font-extrabold">Confirmación</div>
                 <div className="mt-1 text-xs text-gray-500">
-                  Ingresa el total contado. Debe ser igual al total esperado para permitir el cierre.
+                  Ingresa el <strong>total contado/registrado</strong> (base + ventas). Debe ser igual al esperado para cerrar.
                 </div>
 
                 <div className="mt-3 grid gap-2">
@@ -262,7 +285,7 @@ export default function CloseShiftPage() {
 
                 {!diffOk && (
                   <div className="mt-3 alert-err">
-                    El valor contado no cuadra. Ajusta el total para poder cerrar el turno.
+                    El valor contado no cuadra. Ajusta el valor para poder cerrar el turno.
                   </div>
                 )}
               </div>
@@ -281,7 +304,7 @@ export default function CloseShiftPage() {
               </div>
 
               <div className="text-xs text-gray-500">
-                Recomendación: si la diferencia no cuadra, revisa ventas recientes y el arqueo físico antes de cerrar.
+                Recomendación: si no cuadra, revisa el conteo y las ventas del turno antes de cerrar.
               </div>
             </div>
           </div>

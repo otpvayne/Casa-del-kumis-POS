@@ -46,12 +46,7 @@ export default function OpenShiftPage() {
       setBranchId(id);
 
       // traer nombre de sucursal (para no mostrar el UUID)
-      const { data: br } = await supabase
-        .from("branches")
-        .select("name")
-        .eq("id", id)
-        .maybeSingle();
-
+      const { data: br } = await supabase.from("branches").select("name").eq("id", id).maybeSingle();
       setBranchName(br?.name ?? "");
 
       setLoading(false);
@@ -76,11 +71,12 @@ export default function OpenShiftPage() {
       return;
     }
 
+    // ✅ Modelo nuevo: expected_total arranca con la base (opening_cash)
     const { error } = await supabase.from("shifts").insert({
       branch_id: branchId,
       opening_cash: cash,
       status: "OPEN",
-      expected_total: 0,
+      expected_total: cash, // ✅ antes estaba en 0
     });
 
     setSaving(false);
@@ -130,7 +126,7 @@ export default function OpenShiftPage() {
               <div className="rounded-2xl border border-gray-200 p-4">
                 <div className="mb-2 text-sm font-extrabold">Monto inicial</div>
                 <div className="text-xs text-gray-500">
-                  Este valor sirve como base para el arqueo al cerrar el turno.
+                  Este valor se suma a todas las ventas del turno para el cierre.
                 </div>
 
                 <div className="mt-3 grid gap-2">

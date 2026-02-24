@@ -537,24 +537,35 @@ setShowCreateCustomer(false);
       return;
     }
 
-    const { data: shiftRow, error: shGetErr } = await supabase.from("shifts").select("expected_total").eq("id", shiftId).single();
+    // ✅ Acumular SOLO efectivo en el turno (opening_cash + ventas CASH)
+// ✅ Modelo nuevo: expected_total = opening_cash + SUM(ventas.total del turno)
+// Entonces por cada venta sumamos el TOTAL de la venta (sin importar método de pago).
+const { data: shiftRow, error: shGetErr } = await supabase
+  .from("shifts")
+  .select("expected_total")
+  .eq("id", shiftId)
+  .single();
 
-    if (shGetErr) {
-      setSavingSale(false);
-      setPayError(shGetErr.message);
-      return;
-    }
+if (shGetErr) {
+  setSavingSale(false);
+  setPayError(shGetErr.message);
+  return;
+}
 
-    const currentExpected = Number(shiftRow.expected_total ?? 0);
-    const newExpected = Math.round((currentExpected + total) * 100) / 100;
+const currentExpectedTotal = Number(shiftRow.expected_total ?? 0);
+const newExpectedTotal = Math.round((currentExpectedTotal + total) * 100) / 100;
 
-    const { error: shUpdErr } = await supabase.from("shifts").update({ expected_total: newExpected }).eq("id", shiftId);
+const { error: shUpdErr } = await supabase
+  .from("shifts")
+  .update({ expected_total: newExpectedTotal })
+  .eq("id", shiftId);
 
-    if (shUpdErr) {
-      setSavingSale(false);
-      setPayError(shUpdErr.message);
-      return;
-    }
+if (shUpdErr) {
+  setSavingSale(false);
+  setPayError(shUpdErr.message);
+  return;
+}
+
 
     setSavingSale(false);
     setShowPay(false);
