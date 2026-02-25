@@ -1239,7 +1239,15 @@ function TicketInline({
 
   return (
     <div className="ticket">
-      <img src="/logo.png" style={{ width: 120, margin: "0 auto", display: "block" }} />
+  <img
+    src="/logo.png"
+    alt="logo"
+    style={{
+      width: "70px",
+      display: "block",
+      margin: "0 auto"
+    }}
+  />
 
       <div className="center bold">CASA DEL KUMIS</div>
       <div className="center">NIT: 901192245-9</div>
