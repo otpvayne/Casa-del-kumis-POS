@@ -12,40 +12,39 @@ export default function OpenShiftPage() {
   const [branchId, setBranchId] = useState<string | null>(null);
   const [branchName, setBranchName] = useState<string>("");
 
-  const [openingCash, setOpeningCash] = useState<string>("0");
+  const [openingCash, setOpeningCash] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // ✅ toNum actualizado: maneja tanto "5400.64" como "5.400,64"
   const toNum = (v: string) => {
     if (!v) return 0;
-    let cleaned = v.trim().replace(/\./g, "").replace(",", ".");
-    const n = Number(cleaned);
+    if (v.includes(",")) {
+      const cleaned = v.replace(/\./g, "").replace(",", ".");
+      const n = Number(cleaned);
+      return Number.isNaN(n) ? 0 : n;
+    }
+    const n = Number(v);
     return Number.isNaN(n) ? 0 : n;
   };
 
   const prettyMoney = useMemo(() => {
     const n = toNum(openingCash);
-    return n.toLocaleString("es-CO");
+    if (!n) return "0";
+    return n.toLocaleString("es-CO", { minimumFractionDigits: 0, maximumFractionDigits: 2 });
   }, [openingCash]);
 
   useEffect(() => {
     const run = async () => {
       const { data } = await supabase.auth.getSession();
-      if (!data.session) {
-        router.replace("/login");
-        return;
-      }
+      if (!data.session) { router.replace("/login"); return; }
 
       const id = localStorage.getItem("selected_branch_id");
-      if (!id) {
-        router.replace("/select-branch");
-        return;
-      }
+      if (!id) { router.replace("/select-branch"); return; }
 
       setBranchId(id);
 
-      // traer nombre de sucursal (para no mostrar el UUID)
       const { data: br } = await supabase.from("branches").select("name").eq("id", id).maybeSingle();
       setBranchName(br?.name ?? "");
 
@@ -71,20 +70,16 @@ export default function OpenShiftPage() {
       return;
     }
 
-    // ✅ Modelo nuevo: expected_total arranca con la base (opening_cash)
     const { error } = await supabase.from("shifts").insert({
       branch_id: branchId,
       opening_cash: cash,
       status: "OPEN",
-      expected_total: cash, // ✅ antes estaba en 0
+      expected_total: cash,
     });
 
     setSaving(false);
 
-    if (error) {
-      setError(error.message);
-      return;
-    }
+    if (error) { setError(error.message); return; }
 
     router.replace("/pos");
   };
@@ -105,12 +100,7 @@ export default function OpenShiftPage() {
               </div>
             </div>
 
-            <button
-              className="btn"
-              onClick={() => router.replace("/pos")}
-              disabled={saving}
-              title="Volver al punto de venta"
-            >
+            <button className="btn" onClick={() => router.replace("/pos")} disabled={saving}>
               Volver
             </button>
           </div>
@@ -131,16 +121,10 @@ export default function OpenShiftPage() {
 
                 <div className="mt-3 grid gap-2">
                   <label className="label">Efectivo en caja</label>
-                  <input
-                    value={openingCash}
-                    onChange={(e) => setOpeningCash(e.target.value)}
-                    type="text"
-                    inputMode="numeric"
-                    pattern="[0-9.,]*"
-                    placeholder="0"
-                    disabled={saving}
-                    className="input"
-                  />
+
+                  {/* ✅ CashInput con formato de miles + decimales */}
+                  <CashInput value={openingCash} setValue={setOpeningCash} disabled={saving} />
+
                   <div className="text-xs text-gray-500">
                     Vista previa: <span className="font-extrabold text-gray-900">${prettyMoney}</span>
                   </div>
@@ -166,5 +150,54 @@ export default function OpenShiftPage() {
         </div>
       </PageShell>
     </div>
+  );
+}
+
+// ✅ Input con separador de miles (puntos) y decimales con coma
+function CashInput({
+  value,
+  setValue,
+  disabled,
+  placeholder = "0",
+}: {
+  value: string;
+  setValue: (v: string) => void;
+  disabled: boolean;
+  placeholder?: string;
+}) {
+  const formatDisplay = (raw: string) => {
+    if (!raw) return "";
+
+    const withDot = raw.replace(",", ".");
+    const [intPart, decPart] = withDot.split(".");
+
+    const intFormatted = intPart
+      ? Number(intPart).toLocaleString("es-CO")
+      : "0";
+
+    if (decPart !== undefined) return `${intFormatted},${decPart}`;
+    return intFormatted;
+  };
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const raw = e.target.value
+      .replace(/\./g, "")   // quita puntos de miles
+      .replace(",", ".");   // coma → punto decimal interno
+
+    if (!/^\d*\.?\d{0,2}$/.test(raw)) return;
+
+    setValue(raw);
+  };
+
+  return (
+    <input
+      type="text"
+      inputMode="decimal"
+      value={formatDisplay(value)}
+      onChange={handleChange}
+      placeholder={placeholder}
+      disabled={disabled}
+      className="input"
+    />
   );
 }

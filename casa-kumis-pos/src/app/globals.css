@@ -129,19 +129,16 @@ body {
   /* capa que se vuelve visible en print */
 }
 
-/* Estilos ticket (los mismos que ya tienes en page.tsx global style)
-   OJO: Esto lo dejas igual, pero si quieres, lo puedes centralizar aquí también.
-*/
 @page {
   size: 80mm auto;
-  margin: 2mm;
+  margin: 2mm 2mm 0 2mm;
 }
 
 @media print {
   @page {
-  size: 80mm;
-  margin: 0;
-}
+    size: 80mm auto;
+    margin: 2mm 2mm 0 2mm;
+  }
 
   html,
   body {
@@ -149,7 +146,8 @@ body {
     padding: 0 !important;
     width: 80mm !important;
     height: auto !important;
-    overflow: hidden !important;
+    min-height: 0 !important;
+    overflow: visible !important;
     background: #fff !important;
   }
 
@@ -161,21 +159,20 @@ body {
   /* Muestra solo el layer de impresión */
   .print-layer {
     display: block !important;
-    position: fixed !important;
-    left: 0 !important;
-    top: 0 !important;
+    position: static !important;   /* ← clave: static colapsa al tamaño del contenido */
     width: 80mm !important;
     margin: 0 !important;
     padding: 0 !important;
     background: #fff !important;
+    overflow: visible !important;
   }
 
-  /* Importante: NO forzar block a todos */
+  /* Restaura display de hijos sin forzar block a todos */
   .print-layer * {
-    display: revert !important; /* <- clave para que no cree páginas extra */
+    display: revert !important;
   }
 
-  /* evita cortes raros en tablas/imágenes */
+  /* Evita cortes raros en tablas/imágenes */
   .print-layer,
   .print-layer table,
   .print-layer img,
@@ -183,9 +180,15 @@ body {
     break-inside: avoid !important;
     page-break-inside: avoid !important;
   }
+
+  /* Elimina espacio muerto al final */
+  .print-layer:last-child {
+    page-break-after: avoid !important;
+    break-after: avoid !important;
+  }
 }
 
-/* Ticket helpers (si decides usar clases globales) */
+/* Ticket helpers */
 .ticket {
   font-family: Arial, sans-serif;
   font-size: 11px;

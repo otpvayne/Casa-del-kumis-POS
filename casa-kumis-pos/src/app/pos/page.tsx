@@ -383,11 +383,19 @@ export default function PosPage() {
 
   // --- Cobro helpers
   const toNum = (v: string) => {
-    if (!v) return 0;
-    let cleaned = v.trim().replace(/\./g, "").replace(",", ".");
+  if (!v) return 0;
+
+  // Si tiene coma: formato colombiano "5.400,64" → quita puntos de miles, coma → punto
+  if (v.includes(",")) {
+    const cleaned = v.replace(/\./g, "").replace(",", ".");
     const n = Number(cleaned);
     return Number.isNaN(n) ? 0 : n;
-  };
+  }
+
+  // Si no tiene coma: puede ser "5400.64" (punto decimal) o "5400" entero
+  const n = Number(v);
+  return Number.isNaN(n) ? 0 : n;
+};
 
   const paymentsSum = useMemo(() => {
     return Math.round((toNum(cash) + toNum(card) + toNum(transfer) + toNum(qr)) * 100) / 100;
@@ -1158,16 +1166,56 @@ function PayInput({
   setValue: (v: string) => void;
   disabled: boolean;
 }) {
+  // Formatea la parte entera con separador de miles (puntos)
+  // y conserva la parte decimal con coma
+  // Ej: "5400.64" → "5.400,64"
+  const formatDisplay = (raw: string) => {
+    if (!raw || raw === "0") return "";
+
+    // Normaliza: reemplaza coma decimal por punto para trabajar internamente
+    const normalized = raw.replace(",", ".");
+
+    const [intPart, decPart] = normalized.split(".");
+
+    const intFormatted = intPart
+      ? Number(intPart).toLocaleString("es-CO")
+      : "0";
+
+    if (decPart !== undefined) {
+      // Tiene decimales (incluso si está vacío, ej: el usuario escribió la coma)
+      return `${intFormatted},${decPart}`;
+    }
+
+    return intFormatted;
+  };
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const raw = e.target.value;
+
+    // Quita los puntos de miles que el formato agrega
+    // pero conserva la coma decimal
+    const cleaned = raw
+      .replace(/\./g, "")   // quita separadores de miles
+      .replace(",", ".");   // convierte coma decimal → punto (para parseFloat)
+
+    // Solo permite dígitos, un punto decimal y máx 2 decimales
+    const valid = cleaned.match(/^\d*\.?\d{0,2}$/);
+    if (!valid) return;
+
+    // Guarda en formato "5400.64" internamente
+    setValue(cleaned);
+  };
+
   return (
     <label className="grid gap-1">
       <span className="label">{label}</span>
       <input
         type="text"
-        inputMode="numeric"
-        pattern="[0-9.,]*"
-        value={value}
+        inputMode="decimal"
+        value={formatDisplay(value)}
         disabled={disabled}
-        onChange={(e) => setValue(e.target.value)}
+        onChange={handleChange}
+        placeholder="0"
         className="input"
       />
     </label>

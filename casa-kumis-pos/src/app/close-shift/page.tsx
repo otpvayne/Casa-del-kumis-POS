@@ -35,10 +35,15 @@ export default function CloseShiftPage() {
   const [openingCash, setOpeningCash] = useState<number>(0);
   const [expectedTotal, setExpectedTotal] = useState<number>(0);
 
+  // ✅ toNum: maneja "5400.64" (interno) y "5.400,64" (colombiano)
   const toNum = (v: string) => {
     if (!v) return 0;
-    let cleaned = v.trim().replace(/\./g, "").replace(",", ".");
-    const n = Number(cleaned);
+    if (v.includes(",")) {
+      const cleaned = v.replace(/\./g, "").replace(",", ".");
+      const n = Number(cleaned);
+      return Number.isNaN(n) ? 0 : n;
+    }
+    const n = Number(v);
     return Number.isNaN(n) ? 0 : n;
   };
 
@@ -65,8 +70,6 @@ export default function CloseShiftPage() {
       sales_count: Number(row.sales_count ?? 0),
     });
 
-    // ✅ FIX: usar expected_total del RPC (base + ventas reales),
-    // y solo pedir opening_cash de la tabla para mostrar el desglose
     const { data: sh, error: shErr } = await supabase
       .from("shifts")
       .select("opening_cash")
@@ -76,7 +79,7 @@ export default function CloseShiftPage() {
     if (shErr) throw new Error(shErr.message);
 
     setOpeningCash(Number(sh.opening_cash ?? 0));
-    setExpectedTotal(Number(row.expected_total ?? 0)); // ✅ viene del RPC, no de la tabla
+    setExpectedTotal(Number(row.expected_total ?? 0));
   };
 
   useEffect(() => {
@@ -248,15 +251,12 @@ export default function CloseShiftPage() {
 
                 <div className="mt-3 grid gap-2">
                   <label className="label">Total contado</label>
-                  <input
-                    type="text"
-                    inputMode="numeric"
-                    pattern="[0-9.,]*"
+                  {/* ✅ CashInput con formato de miles + decimales */}
+                  <CashInput
                     value={confirmValue}
-                    onChange={(e) => setConfirmValue(e.target.value)}
-                    placeholder={`Ej: ${expected.toLocaleString("es-CO")}`}
+                    setValue={setConfirmValue}
                     disabled={closing}
-                    className="input"
+                    placeholder={expected.toLocaleString("es-CO")}
                   />
                 </div>
 
@@ -318,5 +318,47 @@ function Row({ label, value }: { label: string; value: number }) {
         ${Number(value ?? 0).toLocaleString("es-CO")}
       </span>
     </div>
+  );
+}
+
+// ✅ Input con separador de miles (puntos) y decimales con coma — formato colombiano
+function CashInput({
+  value,
+  setValue,
+  disabled,
+  placeholder = "0",
+}: {
+  value: string;
+  setValue: (v: string) => void;
+  disabled: boolean;
+  placeholder?: string;
+}) {
+  const formatDisplay = (raw: string) => {
+    if (!raw) return "";
+    const withDot = raw.replace(",", ".");
+    const [intPart, decPart] = withDot.split(".");
+    const intFormatted = intPart ? Number(intPart).toLocaleString("es-CO") : "0";
+    if (decPart !== undefined) return `${intFormatted},${decPart}`;
+    return intFormatted;
+  };
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const raw = e.target.value
+      .replace(/\./g, "")  // quita puntos de miles
+      .replace(",", ".");  // coma → punto decimal interno
+    if (!/^\d*\.?\d{0,2}$/.test(raw)) return;
+    setValue(raw);
+  };
+
+  return (
+    <input
+      type="text"
+      inputMode="decimal"
+      value={formatDisplay(value)}
+      onChange={handleChange}
+      placeholder={placeholder}
+      disabled={disabled}
+      className="input"
+    />
   );
 }

@@ -34,10 +34,18 @@ export default function AdminProductsPage() {
   const [newName, setNewName] = useState("");
   const [creating, setCreating] = useState(false);
 
-  // ✅ imagen (nuevo)
+  // imagen (crear)
   const [newImageFile, setNewImageFile] = useState<File | null>(null);
   const [newImagePreview, setNewImagePreview] = useState<string | null>(null);
   const [uploadingImage, setUploadingImage] = useState(false);
+
+  // ✅ editar producto
+  const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editImageFile, setEditImageFile] = useState<File | null>(null);
+  const [editImagePreview, setEditImagePreview] = useState<string | null>(null);
+  const [updating, setUpdating] = useState(false);
+  const [uploadingEditImage, setUploadingEditImage] = useState(false);
 
   // seleccionar sucursal
   const [selectedBranchId, setSelectedBranchId] = useState<string>("");
@@ -107,16 +115,21 @@ export default function AdminProductsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ✅ preview cuando seleccionas archivo
+  // preview imagen nueva (crear)
   useEffect(() => {
-    if (!newImageFile) {
-      setNewImagePreview(null);
-      return;
-    }
+    if (!newImageFile) { setNewImagePreview(null); return; }
     const url = URL.createObjectURL(newImageFile);
     setNewImagePreview(url);
     return () => URL.revokeObjectURL(url);
   }, [newImageFile]);
+
+  // ✅ preview imagen edición
+  useEffect(() => {
+    if (!editImageFile) { setEditImagePreview(null); return; }
+    const url = URL.createObjectURL(editImageFile);
+    setEditImagePreview(url);
+    return () => URL.revokeObjectURL(url);
+  }, [editImageFile]);
 
   const resetCreateForm = () => {
     setNewName("");
@@ -124,24 +137,28 @@ export default function AdminProductsPage() {
     setNewImagePreview(null);
   };
 
+  const resetEditForm = () => {
+    setEditingProduct(null);
+    setEditName("");
+    setEditImageFile(null);
+    setEditImagePreview(null);
+  };
+
   const safeExt = (file: File) => {
     const n = (file.name || "").toLowerCase();
     const ext = n.split(".").pop() || "";
-    // fallback por si viene sin extensión
     if (ext && ext.length <= 6) return ext;
     if (file.type === "image/png") return "png";
     if (file.type === "image/webp") return "webp";
     return "jpg";
   };
 
-  // ✅ sube imagen al bucket y devuelve URL pública
-  const uploadProductImage = async (file: File) => {
-    // validaciones rápidas
+  const uploadProductImage = async (file: File, setUploading: (v: boolean) => void) => {
     if (!file.type.startsWith("image/")) throw new Error("El archivo debe ser una imagen.");
     const maxMB = 6;
     if (file.size > maxMB * 1024 * 1024) throw new Error(`La imagen supera ${maxMB}MB.`);
 
-    setUploadingImage(true);
+    setUploading(true);
     try {
       const ext = safeExt(file);
       const filename = `${crypto.randomUUID()}.${ext}`;
@@ -156,12 +173,10 @@ export default function AdminProductsPage() {
       if (upErr) throw new Error(upErr.message);
 
       const { data } = supabase.storage.from(BUCKET).getPublicUrl(path);
-      const publicUrl = data?.publicUrl;
-
-      if (!publicUrl) throw new Error("No se pudo obtener la URL pública de la imagen.");
-      return publicUrl;
+      if (!data?.publicUrl) throw new Error("No se pudo obtener la URL pública de la imagen.");
+      return data.publicUrl;
     } finally {
-      setUploadingImage(false);
+      setUploading(false);
     }
   };
 
@@ -174,13 +189,10 @@ export default function AdminProductsPage() {
 
     try {
       let image_url: string | null = null;
-
-      // ✅ si hay imagen, súbela primero
       if (newImageFile) {
-        image_url = await uploadProductImage(newImageFile);
+        image_url = await uploadProductImage(newImageFile, setUploadingImage);
       }
 
-      // ✅ insertar producto con image_url
       const { data, error } = await supabase
         .from("products")
         .insert({ name, image_url })
@@ -200,6 +212,52 @@ export default function AdminProductsPage() {
       setErr(e.message ?? "Error creando producto.");
     } finally {
       setCreating(false);
+    }
+  };
+
+  // ✅ abrir modal de edición
+  const openEdit = (p: Product) => {
+    setEditingProduct(p);
+    setEditName(p.name);
+    setEditImageFile(null);
+    setEditImagePreview(null);
+    setErr(null);
+  };
+
+  // ✅ guardar cambios del producto
+  const updateProduct = async () => {
+    if (!editingProduct) return;
+    const name = editName.trim();
+    if (!name) return setErr("Nombre obligatorio.");
+
+    setErr(null);
+    setUpdating(true);
+
+    try {
+      let image_url = editingProduct.image_url ?? null;
+
+      if (editImageFile) {
+        image_url = await uploadProductImage(editImageFile, setUploadingEditImage);
+      }
+
+      const { error } = await supabase
+        .from("products")
+        .update({ name, image_url })
+        .eq("id", editingProduct.id);
+
+      if (error) throw new Error(error.message);
+
+      setProducts((prev) =>
+        prev
+          .map((p) => (p.id === editingProduct.id ? { ...p, name, image_url } : p))
+          .sort((a, b) => a.name.localeCompare(b.name))
+      );
+
+      resetEditForm();
+    } catch (e: any) {
+      setErr(e.message ?? "Error actualizando producto.");
+    } finally {
+      setUpdating(false);
     }
   };
 
@@ -274,7 +332,6 @@ export default function AdminProductsPage() {
   const rowsForBranch = useMemo(() => {
     if (!selectedBranchId) return [];
     const bps = branchProducts.filter((x) => x.branch_id === selectedBranchId);
-
     return bps
       .map((bp) => ({
         ...bp,
@@ -290,26 +347,21 @@ export default function AdminProductsPage() {
     setBranchProducts((prev) => prev.map((x) => (x.id === id ? { ...x, ...patch } : x)));
   };
 
-  // asignaciones por producto
   const assignCountByProduct = useMemo(() => {
     const map = new Map<string, number>();
     for (const bp of branchProducts) map.set(bp.product_id, (map.get(bp.product_id) ?? 0) + 1);
     return map;
   }, [branchProducts]);
 
-  // desactivar en todas
   const deactivateEverywhere = async (productId: string) => {
     setErr(null);
     setDeactivatingId(productId);
-
     try {
       const { error } = await supabase
         .from("branch_products")
         .update({ is_active: false, is_favorite: false })
         .eq("product_id", productId);
-
       if (error) throw new Error(error.message);
-
       setBranchProducts((prev) =>
         prev.map((x) =>
           x.product_id === productId ? { ...x, is_active: false, is_favorite: false } : x
@@ -322,31 +374,25 @@ export default function AdminProductsPage() {
     }
   };
 
-  // borrar (solo si no hay ventas)
   const deleteProduct = async (productId: string) => {
     setErr(null);
-
     const prod = products.find((p) => p.id === productId);
     const name = prod?.name ?? "este producto";
-
     const ok = window.confirm(
       `¿Seguro que quieres eliminar "${name}"?\n\nSe eliminará de sucursales (branch_products) y luego el producto.\nSi ya tiene ventas, NO se puede borrar.`
     );
     if (!ok) return;
 
     setDeletingId(productId);
-
     try {
       const { count, error: salesCountErr } = await supabase
         .from("sale_items")
         .select("id", { count: "exact", head: true })
         .eq("product_id", productId);
-
       if (salesCountErr) throw new Error(salesCountErr.message);
-
       if ((count ?? 0) > 0) {
         throw new Error(
-          `No se puede borrar porque ya tiene ventas registradas (${count}). En vez de borrar, desactívalo para que no salga en el POS.`
+          `No se puede borrar porque ya tiene ventas registradas (${count}). En vez de borrar, desactívalo.`
         );
       }
 
@@ -388,6 +434,94 @@ export default function AdminProductsPage() {
       >
         {err && <div className="alert-err mb-4">{err}</div>}
 
+        {/* ✅ MODAL DE EDICIÓN */}
+        {editingProduct && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+            onClick={(e) => { if (e.target === e.currentTarget) resetEditForm(); }}
+          >
+            <div className="w-full max-w-md rounded-3xl bg-white shadow-xl">
+              <div className="card-h flex items-center justify-between">
+                <div>
+                  <div className="text-lg font-extrabold">Editar producto</div>
+                  <div className="text-sm text-gray-500">Modifica nombre e imagen.</div>
+                </div>
+                <button className="btn" onClick={resetEditForm}>Cancelar</button>
+              </div>
+
+              <div className="card-b space-y-4">
+                <label className="grid gap-1">
+                  <span className="label">Nombre</span>
+                  <input
+                    value={editName}
+                    onChange={(e) => setEditName(e.target.value)}
+                    placeholder="Nombre del producto"
+                    className="input"
+                    disabled={updating}
+                  />
+                </label>
+
+                <div className="grid gap-2">
+                  <span className="label">Imagen</span>
+
+                  <div className="grid gap-3 sm:grid-cols-[120px_1fr] items-start">
+                    {/* preview: muestra la nueva si hay, si no la actual */}
+                    <div className="w-full aspect-square rounded-2xl border border-gray-200 bg-gray-50 overflow-hidden flex items-center justify-center">
+                      {editImagePreview ? (
+                        <img src={editImagePreview} alt="Preview nueva" className="w-full h-full object-contain" />
+                      ) : editingProduct.image_url ? (
+                        <img src={editingProduct.image_url} alt="Imagen actual" className="w-full h-full object-contain" />
+                      ) : (
+                        <div className="text-xs text-gray-400 font-semibold">Sin imagen</div>
+                      )}
+                    </div>
+
+                    <div className="grid gap-2">
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="input"
+                        onChange={(e) => setEditImageFile(e.target.files?.[0] ?? null)}
+                        disabled={updating || uploadingEditImage}
+                      />
+                      {editingProduct.image_url && !editImageFile && (
+                        <div className="text-xs text-gray-500">
+                          Elige una nueva imagen para reemplazar la actual.
+                        </div>
+                      )}
+                      {!editingProduct.image_url && !editImageFile && (
+                        <div className="text-xs text-gray-500">
+                          Este producto no tiene imagen. Puedes agregar una ahora.
+                        </div>
+                      )}
+                      {editImageFile && (
+                        <button
+                          type="button"
+                          className="btn btn-ghost"
+                          onClick={() => setEditImageFile(null)}
+                          disabled={updating}
+                        >
+                          Quitar nueva imagen
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {err && <div className="alert-err">{err}</div>}
+
+                <button
+                  className="btn btn-primary w-full"
+                  onClick={updateProduct}
+                  disabled={updating || uploadingEditImage}
+                >
+                  {uploadingEditImage ? "Subiendo imagen..." : updating ? "Guardando..." : "Guardar cambios"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className="grid gap-4 lg:grid-cols-[1.1fr_1.4fr]">
           {/* IZQUIERDA */}
           <div className="space-y-4">
@@ -411,19 +545,14 @@ export default function AdminProductsPage() {
                   />
                 </label>
 
-                {/* ✅ Imagen */}
                 <div className="grid gap-2">
                   <div className="flex items-center justify-between">
                     <span className="label">Imagen (opcional)</span>
-
                     {newImageFile && (
                       <button
                         type="button"
                         className="btn btn-ghost"
-                        onClick={() => {
-                          setNewImageFile(null);
-                          setNewImagePreview(null);
-                        }}
+                        onClick={() => { setNewImageFile(null); setNewImagePreview(null); }}
                         disabled={creating || uploadingImage}
                       >
                         Quitar imagen
@@ -434,11 +563,7 @@ export default function AdminProductsPage() {
                   <div className="grid gap-3 sm:grid-cols-[120px_1fr] items-start">
                     <div className="w-full aspect-square rounded-2xl border border-gray-200 bg-gray-50 overflow-hidden flex items-center justify-center">
                       {newImagePreview ? (
-                        <img
-                          src={newImagePreview}
-                          alt="Preview"
-                          className="w-full h-full object-contain"
-                        />
+                        <img src={newImagePreview} alt="Preview" className="w-full h-full object-contain" />
                       ) : (
                         <div className="text-xs text-gray-400 font-semibold">Sin imagen</div>
                       )}
@@ -449,14 +574,11 @@ export default function AdminProductsPage() {
                         type="file"
                         accept="image/*"
                         className="input"
-                        onChange={(e) => {
-                          const f = e.target.files?.[0] ?? null;
-                          setNewImageFile(f);
-                        }}
+                        onChange={(e) => { const f = e.target.files?.[0] ?? null; setNewImageFile(f); }}
                         disabled={creating || uploadingImage}
                       />
                       <div className="text-xs text-gray-500">
-                        Recomendado: PNG/JPG/WebP. Máx 6MB. Se ajusta automáticamente en el POS.
+                        Recomendado: PNG/JPG/WebP. Máx 6MB.
                       </div>
                     </div>
                   </div>
@@ -499,7 +621,7 @@ export default function AdminProductsPage() {
                         <div key={p.id} className="rounded-2xl border border-gray-200 p-3">
                           <div className="flex items-start justify-between gap-3">
                             <div className="flex items-start gap-3 min-w-0">
-                              <div className="h-12 w-12 rounded-2xl border border-gray-200 bg-gray-50 overflow-hidden flex items-center justify-center">
+                              <div className="h-12 w-12 rounded-2xl border border-gray-200 bg-gray-50 overflow-hidden flex items-center justify-center flex-shrink-0">
                                 {p.image_url ? (
                                   <img
                                     src={p.image_url}
@@ -520,7 +642,17 @@ export default function AdminProductsPage() {
                               </div>
                             </div>
 
-                            <div className="flex flex-wrap gap-2 justify-end">
+                            <div className="flex flex-wrap gap-2 justify-end flex-shrink-0">
+                              {/* ✅ botón editar */}
+                              <button
+                                className="btn"
+                                onClick={() => openEdit(p)}
+                                disabled={busyDeleting || busyDeact}
+                                title="Editar nombre e imagen"
+                              >
+                                Editar
+                              </button>
+
                               <button
                                 className="btn"
                                 onClick={() => deactivateEverywhere(p.id)}
@@ -570,9 +702,7 @@ export default function AdminProductsPage() {
                       className="input"
                     >
                       {branches.map((b) => (
-                        <option key={b.id} value={b.id}>
-                          {b.name}
-                        </option>
+                        <option key={b.id} value={b.id}>{b.name}</option>
                       ))}
                     </select>
                   </label>
@@ -592,9 +722,7 @@ export default function AdminProductsPage() {
                     >
                       <option value="">Selecciona producto…</option>
                       {products.map((p) => (
-                        <option key={p.id} value={p.id}>
-                          {p.name}
-                        </option>
+                        <option key={p.id} value={p.id}>{p.name}</option>
                       ))}
                     </select>
 
