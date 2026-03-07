@@ -1,7 +1,3 @@
-// ✅ PEGA ESTO EN: casa-kumis-pos\src\app\pos\page.tsx
-// Reemplaza tu archivo completo por este SOLO si te queda más fácil,
-// o copia/pega por bloques siguiendo los comentarios "PEGA AQUÍ".
-
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -39,7 +35,6 @@ type Customer = {
   email: string | null;
 };
 
-// ✅ NUEVO: Tipos para historial
 type SaleHistoryRow = {
   id: string;
   receipt_number: number | null;
@@ -53,12 +48,14 @@ type PaymentRow = {
   amount: number;
 };
 
+// ✅ Billetes disponibles para calculadora de cambio
+const BILLS = [20000, 50000, 100000];
+
 export default function PosPage() {
   const router = useRouter();
   const [branchId, setBranchId] = useState<string | null>(null);
   const [shiftId, setShiftId] = useState<string | null>(null);
 
-  // ✅ para UI humana
   const [branchName, setBranchName] = useState<string>("-");
   const [shiftOpenedAt, setShiftOpenedAt] = useState<string | null>(null);
 
@@ -80,26 +77,22 @@ export default function PosPage() {
   const [saleOkMsg, setSaleOkMsg] = useState<string | null>(null);
   const [printingSaleId, setPrintingSaleId] = useState<string | null>(null);
 
-  // =========================
-  // ✅ Clientes (POS)
-  // =========================
+  // ✅ Billete seleccionado para calculadora de cambio
+  const [selectedBill, setSelectedBill] = useState<number | null>(null);
+
+  // Clientes
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [customerSearch, setCustomerSearch] = useState<string>("");
   const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
-
-  // crear cliente rápido
   const [creatingCustomer, setCreatingCustomer] = useState(false);
   const [isCustomerDropdownOpen, setIsCustomerDropdownOpen] = useState(false);
   const [showCreateCustomer, setShowCreateCustomer] = useState(false);
-
   const [newCustId, setNewCustId] = useState("");
   const [newCustName, setNewCustName] = useState("");
   const [newCustPhone, setNewCustPhone] = useState("");
   const [newCustEmail, setNewCustEmail] = useState("");
 
-  // =========================
-  // ✅ NUEVO: Historial del turno (modal)
-  // =========================
+  // Historial
   const [showHistory, setShowHistory] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
@@ -113,9 +106,7 @@ export default function PosPage() {
         .select("value")
         .eq("key", "tax_rate")
         .single();
-
       if (error) throw new Error(error.message);
-
       const rate = Number(data?.value ?? "0.08");
       return Number.isNaN(rate) ? 0.08 : rate;
     } catch {
@@ -129,11 +120,9 @@ export default function PosPage() {
       .select("id, identification, name, phone, email")
       .order("created_at", { ascending: false })
       .limit(200);
-
     if (error) throw new Error(error.message);
-
     const mapped: Customer[] = (data ?? [])
-      .filter((c: any) => c?.id) // ✅ blindaje
+      .filter((c: any) => c?.id)
       .map((c: any) => ({
         id: String(c.id),
         identification: String(c.identification ?? ""),
@@ -141,13 +130,10 @@ export default function PosPage() {
         phone: c.phone ? String(c.phone) : null,
         email: c.email ? String(c.email) : null,
       }));
-
     setCustomers(mapped);
-
     const cf =
       mapped.find((x) => x.identification === "CF") ||
       mapped.find((x) => x.name?.toUpperCase() === "CONSUMIDOR FINAL");
-
     setSelectedCustomerId(cf ? cf.id : null);
   };
 
@@ -163,7 +149,6 @@ export default function PosPage() {
       .or("identification.eq.CF,name.ilike.%CONSUMIDOR FINAL%")
       .limit(1)
       .maybeSingle();
-
     if (exErr) throw new Error(exErr.message);
 
     if (existing?.id) {
@@ -178,15 +163,9 @@ export default function PosPage() {
 
     const { data: created, error: cErr } = await supabase
       .from("customers")
-      .insert({
-        identification: "CF",
-        name: "CONSUMIDOR FINAL",
-        phone: null,
-        email: null,
-      })
+      .insert({ identification: "CF", name: "CONSUMIDOR FINAL", phone: null, email: null })
       .select("id,identification,name,phone,email")
       .single();
-
     if (cErr || !created) throw new Error(cErr?.message ?? "No se pudo crear CONSUMIDOR FINAL.");
 
     return {
@@ -201,7 +180,6 @@ export default function PosPage() {
   const createCustomerQuick = async () => {
     const identification = newCustId.trim();
     const name = newCustName.trim();
-
     if (!identification) return setPayError("Identificación obligatoria.");
     if (!name) return setPayError("Nombre obligatorio.");
 
@@ -219,7 +197,6 @@ export default function PosPage() {
         })
         .select("id,identification,name,phone,email")
         .single();
-
       if (error || !data) throw new Error(error?.message ?? "Error creando cliente.");
 
       const created: Customer = {
@@ -232,12 +209,7 @@ export default function PosPage() {
 
       setCustomers((prev) => [created, ...prev].slice(0, 200));
       setSelectedCustomerId(created.id);
-
-      setNewCustId("");
-      setNewCustName("");
-      setNewCustPhone("");
-      setNewCustEmail("");
-
+      setNewCustId(""); setNewCustName(""); setNewCustPhone(""); setNewCustEmail("");
       setSaleOkMsg("Cliente creado ✅");
       setShowCreateCustomer(false);
       setIsCustomerDropdownOpen(false);
@@ -257,11 +229,7 @@ export default function PosPage() {
       if (!id) return router.replace("/select-branch");
 
       const saved = sessionStorage.getItem(`cart_${id}`);
-      if (saved) {
-        try {
-          setCart(JSON.parse(saved));
-        } catch {}
-      }
+      if (saved) { try { setCart(JSON.parse(saved)); } catch {} }
 
       setBranchId(id);
 
@@ -276,14 +244,12 @@ export default function PosPage() {
         .order("opened_at", { ascending: false })
         .limit(1)
         .maybeSingle();
-
       if (shiftErr || !shift) return router.replace("/open-shift");
       setShiftId(shift.id);
       setShiftOpenedAt(shift.opened_at ? String(shift.opened_at) : null);
 
       const rate = await loadTaxRate();
       setTaxRate(rate);
-
       await loadCustomers();
 
       const { data: rows, error: prodErr } = await supabase
@@ -293,21 +259,16 @@ export default function PosPage() {
         .eq("is_active", true)
         .order("is_favorite", { ascending: false });
 
-      if (prodErr) {
-        setPageError(prodErr.message);
-        setLoading(false);
-        return;
-      }
+      if (prodErr) { setPageError(prodErr.message); setLoading(false); return; }
 
-      const mapped: PosProduct[] =
-        (rows ?? []).map((r: any) => ({
-          branch_product_id: r.id,
-          product_id: r.product_id,
-          name: r.products?.name ?? "Producto",
-          price: Number(r.price ?? 0),
-          is_favorite: Boolean(r.is_favorite),
-          image_url: r.products?.image_url ?? null,
-        })) ?? [];
+      const mapped: PosProduct[] = (rows ?? []).map((r: any) => ({
+        branch_product_id: r.id,
+        product_id: r.product_id,
+        name: r.products?.name ?? "Producto",
+        price: Number(r.price ?? 0),
+        is_favorite: Boolean(r.is_favorite),
+        image_url: r.products?.image_url ?? null,
+      }));
 
       setProducts(mapped);
       setLoading(false);
@@ -325,17 +286,14 @@ export default function PosPage() {
     setCart((prev) => {
       const idx = prev.findIndex((x) => x.branch_product_id === p.branch_product_id);
       if (idx === -1) {
-        return [
-          ...prev,
-          {
-            branch_product_id: p.branch_product_id,
-            product_id: p.product_id,
-            name: p.name,
-            unit_price: p.price,
-            qty: 1,
-            image_url: p.image_url ?? null,
-          },
-        ];
+        return [...prev, {
+          branch_product_id: p.branch_product_id,
+          product_id: p.product_id,
+          name: p.name,
+          unit_price: p.price,
+          qty: 1,
+          image_url: p.image_url ?? null,
+        }];
       }
       const copy = [...prev];
       copy[idx] = { ...copy[idx], qty: copy[idx].qty + 1 };
@@ -343,23 +301,22 @@ export default function PosPage() {
     });
   };
 
-  const incQty = (branchProductId: string) => {
+  const incQty = (id: string) => {
     setSaleOkMsg(null);
-    setCart((prev) => prev.map((it) => (it.branch_product_id === branchProductId ? { ...it, qty: it.qty + 1 } : it)));
+    setCart((prev) => prev.map((it) => it.branch_product_id === id ? { ...it, qty: it.qty + 1 } : it));
   };
 
-  const decQty = (branchProductId: string) => {
+  const decQty = (id: string) => {
     setSaleOkMsg(null);
     setCart((prev) =>
-      prev
-        .map((it) => (it.branch_product_id === branchProductId ? { ...it, qty: it.qty - 1 } : it))
-        .filter((it) => it.qty > 0)
+      prev.map((it) => it.branch_product_id === id ? { ...it, qty: it.qty - 1 } : it)
+          .filter((it) => it.qty > 0)
     );
   };
 
-  const removeItem = (branchProductId: string) => {
+  const removeItem = (id: string) => {
     setSaleOkMsg(null);
-    setCart((prev) => prev.filter((it) => it.branch_product_id !== branchProductId));
+    setCart((prev) => prev.filter((it) => it.branch_product_id !== id));
   };
 
   const clearCart = () => {
@@ -383,23 +340,25 @@ export default function PosPage() {
 
   // --- Cobro helpers
   const toNum = (v: string) => {
-  if (!v) return 0;
-
-  // Si tiene coma: formato colombiano "5.400,64" → quita puntos de miles, coma → punto
-  if (v.includes(",")) {
-    const cleaned = v.replace(/\./g, "").replace(",", ".");
-    const n = Number(cleaned);
+    if (!v) return 0;
+    if (v.includes(",")) {
+      const cleaned = v.replace(/\./g, "").replace(",", ".");
+      const n = Number(cleaned);
+      return Number.isNaN(n) ? 0 : n;
+    }
+    const n = Number(v);
     return Number.isNaN(n) ? 0 : n;
-  }
-
-  // Si no tiene coma: puede ser "5400.64" (punto decimal) o "5400" entero
-  const n = Number(v);
-  return Number.isNaN(n) ? 0 : n;
-};
+  };
 
   const paymentsSum = useMemo(() => {
     return Math.round((toNum(cash) + toNum(card) + toNum(transfer) + toNum(qr)) * 100) / 100;
   }, [cash, card, transfer, qr]);
+
+  // ✅ Cambio: billete seleccionado - total de la venta
+  const billChange = useMemo(() => {
+    if (!selectedBill) return null;
+    return Math.round((selectedBill - total) * 100) / 100;
+  }, [selectedBill, total]);
 
   const openPayModal = async () => {
     setPayError(null);
@@ -408,6 +367,7 @@ export default function PosPage() {
     setCard("0");
     setTransfer("0");
     setQr("0");
+    setSelectedBill(null); // ✅ reset billete
     setCustomerSearch("");
     setIsCustomerDropdownOpen(false);
     setShowCreateCustomer(false);
@@ -434,7 +394,6 @@ export default function PosPage() {
   const filteredCustomers = useMemo(() => {
     const q = customerSearch.trim().toLowerCase();
     if (!q) return customers.slice(0, 30);
-
     return customers
       .filter((c) => {
         const a = (c.identification ?? "").toLowerCase();
@@ -451,25 +410,20 @@ export default function PosPage() {
     return customers.find((c) => c.id === selectedCustomerId) ?? null;
   }, [customers, selectedCustomerId]);
 
-  // =========================
-  // ✅ NUEVO: cargar historial del turno
-  // =========================
+  // --- Historial
   const loadShiftHistory = async () => {
     if (!shiftId) return;
-
     setHistoryError(null);
     setHistoryLoading(true);
 
     try {
-      // 1) Ventas del turno (blindaje por branch_id también)
       const { data: salesRows, error: salesErr } = await supabase
         .from("sales")
         .select("id, receipt_number, total, created_at, customer_id, shift_id, branch_id, customers(name,identification)")
         .eq("shift_id", shiftId)
-        .eq("branch_id", branchId) // ✅ evita cruces de sucursal
+        .eq("branch_id", branchId)
         .order("created_at", { ascending: false })
         .limit(80);
-
       if (salesErr) throw new Error(salesErr.message);
 
       const mappedSales: SaleHistoryRow[] = (salesRows ?? []).map((s: any) => ({
@@ -481,34 +435,23 @@ export default function PosPage() {
           ? { name: String(s.customers.name ?? ""), identification: String(s.customers.identification ?? "") }
           : null,
       }));
-
       setHistorySales(mappedSales);
 
-      // 2) Pagos de esas ventas
       const saleIds = mappedSales.map((s) => s.id);
-      if (saleIds.length === 0) {
-        setHistoryPaymentsBySale({});
-        setHistoryLoading(false);
-        return;
-      }
+      if (saleIds.length === 0) { setHistoryPaymentsBySale({}); setHistoryLoading(false); return; }
 
       const { data: payRows, error: payErr } = await supabase
         .from("payments")
         .select("sale_id, method, amount")
         .in("sale_id", saleIds);
-
       if (payErr) throw new Error(payErr.message);
 
       const grouped: Record<string, PaymentRow[]> = {};
       (payRows ?? []).forEach((p: any) => {
         const sid = String(p.sale_id);
         if (!grouped[sid]) grouped[sid] = [];
-        grouped[sid].push({
-          method: p.method as PaymentMethod,
-          amount: Number(p.amount ?? 0),
-        });
+        grouped[sid].push({ method: p.method as PaymentMethod, amount: Number(p.amount ?? 0) });
       });
-
       setHistoryPaymentsBySale(grouped);
       setHistoryLoading(false);
     } catch (e: any) {
@@ -517,11 +460,7 @@ export default function PosPage() {
     }
   };
 
-  const openHistoryModal = async () => {
-    setShowHistory(true);
-    await loadShiftHistory();
-  };
-
+  const openHistoryModal = async () => { setShowHistory(true); await loadShiftHistory(); };
   const closeHistoryModal = () => setShowHistory(false);
 
   const methodLabel = (m: string) => {
@@ -534,15 +473,10 @@ export default function PosPage() {
 
   const saveSale = async () => {
     if (!branchId || !shiftId) return;
-
     setPayError(null);
     setSavingSale(true);
 
-    if (cart.length === 0) {
-      setSavingSale(false);
-      setPayError("El carrito está vacío.");
-      return;
-    }
+    if (cart.length === 0) { setSavingSale(false); setPayError("El carrito está vacío."); return; }
 
     const sum = paymentsSum;
     if (Math.round((sum - total) * 100) / 100 !== 0) {
@@ -562,40 +496,19 @@ export default function PosPage() {
     if (tr > 0) payRows.push({ method: "TRANSFER", amount: tr });
     if (q > 0) payRows.push({ method: "QR", amount: q });
 
-    if (payRows.length === 0) {
-      setSavingSale(false);
-      setPayError("Debes ingresar al menos un método de pago.");
-      return;
-    }
+    if (payRows.length === 0) { setSavingSale(false); setPayError("Debes ingresar al menos un método de pago."); return; }
 
     let customerId = selectedCustomerId;
     try {
-      if (!customerId) {
-        const cf = await ensureConsumidorFinal();
-        customerId = cf.id;
-      }
-    } catch {
-      customerId = selectedCustomerId;
-    }
+      if (!customerId) { const cf = await ensureConsumidorFinal(); customerId = cf.id; }
+    } catch { customerId = selectedCustomerId; }
 
     const { data: saleRow, error: saleErr } = await supabase
       .from("sales")
-      .insert({
-        branch_id: branchId,
-        shift_id: shiftId,
-        customer_id: customerId,
-        subtotal,
-        tax_total: taxTotal,
-        total,
-      })
+      .insert({ branch_id: branchId, shift_id: shiftId, customer_id: customerId, subtotal, tax_total: taxTotal, total })
       .select("id,total")
       .single();
-
-    if (saleErr || !saleRow) {
-      setSavingSale(false);
-      setPayError(saleErr?.message ?? "Error creando venta.");
-      return;
-    }
+    if (saleErr || !saleRow) { setSavingSale(false); setPayError(saleErr?.message ?? "Error creando venta."); return; }
 
     const saleId = saleRow.id as string;
 
@@ -608,53 +521,20 @@ export default function PosPage() {
     }));
 
     const { error: itemsErr } = await supabase.from("sale_items").insert(itemsToInsert);
-    if (itemsErr) {
-      setSavingSale(false);
-      setPayError(itemsErr.message);
-      return;
-    }
+    if (itemsErr) { setSavingSale(false); setPayError(itemsErr.message); return; }
 
-    const paymentsToInsert = payRows.map((p) => ({
-      sale_id: saleId,
-      method: p.method,
-      amount: p.amount,
-    }));
-
+    const paymentsToInsert = payRows.map((p) => ({ sale_id: saleId, method: p.method, amount: p.amount }));
     const { error: payErr } = await supabase.from("payments").insert(paymentsToInsert);
-    if (payErr) {
-      setSavingSale(false);
-      setPayError(payErr.message);
-      return;
-    }
+    if (payErr) { setSavingSale(false); setPayError(payErr.message); return; }
 
-    // ✅ Actualizar expected_cash SOLO con lo pagado en efectivo
     const cashPaid = c;
-
     const { data: shiftRow, error: shGetErr } = await supabase
-      .from("shifts")
-      .select("expected_cash")
-      .eq("id", shiftId)
-      .single();
+      .from("shifts").select("expected_cash").eq("id", shiftId).single();
+    if (shGetErr) { setSavingSale(false); setPayError(shGetErr.message); return; }
 
-    if (shGetErr) {
-      setSavingSale(false);
-      setPayError(shGetErr.message);
-      return;
-    }
-
-    const currentExpectedCash = Number(shiftRow.expected_cash ?? 0);
-    const newExpectedCash = Math.round((currentExpectedCash + cashPaid) * 100) / 100;
-
-    const { error: shUpdErr } = await supabase
-      .from("shifts")
-      .update({ expected_cash: newExpectedCash })
-      .eq("id", shiftId);
-
-    if (shUpdErr) {
-      setSavingSale(false);
-      setPayError(shUpdErr.message);
-      return;
-    }
+    const newExpectedCash = Math.round((Number(shiftRow.expected_cash ?? 0) + cashPaid) * 100) / 100;
+    const { error: shUpdErr } = await supabase.from("shifts").update({ expected_cash: newExpectedCash }).eq("id", shiftId);
+    if (shUpdErr) { setSavingSale(false); setPayError(shUpdErr.message); return; }
 
     setSavingSale(false);
     setShowPay(false);
@@ -663,10 +543,7 @@ export default function PosPage() {
     setPrintingSaleId(saleId);
     sessionStorage.removeItem(`cart_${branchId}`);
 
-    // ✅ opcional: si el historial está abierto, refrescarlo automáticamente
-    if (showHistory) {
-      await loadShiftHistory();
-    }
+    if (showHistory) await loadShiftHistory();
   };
 
   if (loading) return <LoadingCard title="Cargando POS..." />;
@@ -681,7 +558,6 @@ export default function PosPage() {
               <div className="text-xs font-semibold uppercase tracking-wider text-gray-500">Operación</div>
               <div className="mt-1 text-3xl font-black tracking-tight text-gray-900">Punto de venta</div>
             </div>
-
             <div className="hidden sm:flex items-center gap-2 rounded-full border border-gray-200 bg-white px-3 py-2 shadow-sm">
               <span className="h-2 w-2 rounded-full bg-emerald-500" />
               <span className="text-xs font-semibold text-gray-700">Activo</span>
@@ -694,15 +570,11 @@ export default function PosPage() {
               <span className="inline-flex items-center rounded-full border border-gray-200 bg-gray-50 px-3 py-1 font-semibold text-gray-700">
                 Sucursal: <span className="ml-1 font-extrabold">{branchName}</span>
               </span>
-
               <span className="text-gray-300">•</span>
-
               <span className="inline-flex items-center rounded-full border border-blue-200 bg-blue-50 px-3 py-1 font-semibold text-blue-700">
                 Turno: <span className="ml-1 font-extrabold">{formatShift(shiftOpenedAt)}</span>
               </span>
-
               <span className="text-gray-300">•</span>
-
               <span className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 font-semibold text-emerald-700">
                 Impuesto: <span className="ml-1 font-extrabold">{(taxRate * 100).toFixed(2)}%</span>
               </span>
@@ -715,33 +587,28 @@ export default function PosPage() {
           <div className={savingSale ? "opacity-60 pointer-events-none" : ""}>
             <Section title="Favoritos" />
             <ProductsGrid products={favorite} onClick={addToCart} disabled={savingSale} />
-
             <div className="h-5" />
-
             <Section title="Todos" />
             <ProductsGrid products={others} onClick={addToCart} disabled={savingSale} />
           </div>
 
-          {/* DERECHA */}
+          {/* DERECHA — Carrito */}
           <div className="card h-fit">
             <div className="card-h flex items-center justify-between">
               <div>
                 <div className="text-lg font-extrabold">Carrito</div>
                 <div className="text-xs text-gray-500">{cart.length ? `${cart.length} ítem(s)` : "Vacío"}</div>
               </div>
-
-              {/* ✅ NUEVO: botones utilitarios */}
               <div className="flex gap-2">
                 <button className="btn" onClick={openHistoryModal} disabled={!shiftId || savingSale}>
                   Historial
                 </button>
-
                 {shiftId && (
                   <button
                     className="btn"
                     onClick={() => {
                       if (cart.length > 0) {
-                        alert("No puedes cerrar turno con productos en el carrito. Finaliza la venta o vacía el carrito.");
+                        alert("No puedes cerrar turno con productos en el carrito.");
                         return;
                       }
                       router.push("/close-shift");
@@ -772,32 +639,18 @@ export default function PosPage() {
                               <div className="text-[10px] text-gray-400 font-bold">IMG</div>
                             )}
                           </div>
-
                           <div className="min-w-0">
                             <div className="font-extrabold truncate">{it.name}</div>
                             <div className="text-xs text-gray-500">Unit: ${it.unit_price.toLocaleString("es-CO")}</div>
                           </div>
                         </div>
-
                         <div className="text-sm font-extrabold">${(it.unit_price * it.qty).toLocaleString("es-CO")}</div>
                       </div>
-
                       <div className="mt-3 flex items-center gap-2">
-                        <button className="btn px-3 py-1" disabled={savingSale} onClick={() => decQty(it.branch_product_id)}>
-                          –
-                        </button>
+                        <button className="btn px-3 py-1" disabled={savingSale} onClick={() => decQty(it.branch_product_id)}>–</button>
                         <div className="w-10 text-center font-bold">{it.qty}</div>
-                        <button className="btn px-3 py-1" disabled={savingSale} onClick={() => incQty(it.branch_product_id)}>
-                          +
-                        </button>
-
-                        <button
-                          className="btn btn-ghost ml-auto px-3 py-1"
-                          disabled={savingSale}
-                          onClick={() => removeItem(it.branch_product_id)}
-                        >
-                          Quitar
-                        </button>
+                        <button className="btn px-3 py-1" disabled={savingSale} onClick={() => incQty(it.branch_product_id)}>+</button>
+                        <button className="btn btn-ghost ml-auto px-3 py-1" disabled={savingSale} onClick={() => removeItem(it.branch_product_id)}>Quitar</button>
                       </div>
                     </div>
                   ))}
@@ -805,18 +658,13 @@ export default function PosPage() {
               )}
 
               <div className="my-4 border-t border-gray-200" />
-
               <TotalsRow label="Subtotal" value={subtotal} />
               <TotalsRow label="Impuesto" value={taxTotal} />
               <TotalsRow label="Total" value={total} bold />
 
               <div className="mt-4 flex gap-2">
-                <button className="btn w-32" disabled={cart.length === 0 || savingSale} onClick={clearCart}>
-                  Vaciar
-                </button>
-                <button className="btn btn-primary flex-1" disabled={cart.length === 0 || savingSale} onClick={openPayModal}>
-                  Cobrar
-                </button>
+                <button className="btn w-32" disabled={cart.length === 0 || savingSale} onClick={clearCart}>Vaciar</button>
+                <button className="btn btn-primary flex-1" disabled={cart.length === 0 || savingSale} onClick={openPayModal}>Cobrar</button>
               </div>
             </div>
           </div>
@@ -828,35 +676,25 @@ export default function PosPage() {
                 <div className="card-h flex items-center justify-between">
                   <div>
                     <div className="text-lg font-extrabold">Historial del turno</div>
-                    <div className="text-sm text-gray-500">Ventas registradas en esta sucursal (informativo)</div>
+                    <div className="text-sm text-gray-500">Ventas registradas en esta sucursal</div>
                   </div>
-
                   <div className="flex gap-2">
                     <button className="btn" onClick={loadShiftHistory} disabled={historyLoading}>
                       {historyLoading ? "Cargando..." : "Refrescar"}
                     </button>
-                    <button className="btn" onClick={closeHistoryModal}>
-                      ✕
-                    </button>
+                    <button className="btn" onClick={closeHistoryModal}>✕</button>
                   </div>
                 </div>
 
                 <div className="card-b flex-1 overflow-auto space-y-3">
-                  {historyError && <div className="alert-err whitespace-pre-line">{historyError}</div>}
-
-                  {/* Resumen */}
+                  {historyError && <div className="alert-err">{historyError}</div>}
                   <div className="rounded-2xl border border-gray-200 p-3 bg-white">
                     <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div className="text-sm">
-                        <span className="font-extrabold">Ventas:</span> {historySales.length}
-                      </div>
+                      <div className="text-sm"><span className="font-extrabold">Ventas:</span> {historySales.length}</div>
                       <div className="text-sm">
                         <span className="font-extrabold">Total vendido:</span>{" "}
                         ${historySales.reduce((acc, s) => acc + Number(s.total ?? 0), 0).toLocaleString("es-CO")}
                       </div>
-                    </div>
-                    <div className="mt-1 text-xs text-gray-500">
-                      Nota: el cierre de caja valida contra efectivo (base + ventas CASH), no contra medios electrónicos.
                     </div>
                   </div>
 
@@ -870,18 +708,9 @@ export default function PosPage() {
                         const receipt = s.receipt_number
                           ? `LF-${String(s.receipt_number).padStart(6, "0")}`
                           : String(s.id).slice(0, 8).toUpperCase();
-
-                        const dt = new Date(s.created_at);
-                        const time = dt.toLocaleTimeString("es-CO", { hour: "2-digit", minute: "2-digit" });
-
+                        const time = new Date(s.created_at).toLocaleTimeString("es-CO", { hour: "2-digit", minute: "2-digit" });
                         const pays = historyPaymentsBySale[s.id] ?? [];
-                        const payText =
-                          pays.length === 0
-                            ? "Sin pagos"
-                            : pays
-                                .map((p) => `${methodLabel(p.method)} $${Number(p.amount).toLocaleString("es-CO")}`)
-                                .join(" • ");
-
+                        const payText = pays.length === 0 ? "Sin pagos" : pays.map((p) => `${methodLabel(p.method)} $${Number(p.amount).toLocaleString("es-CO")}`).join(" • ");
                         const custText = s.customers?.name
                           ? `${s.customers.name}${s.customers.identification ? ` (${s.customers.identification})` : ""}`
                           : "CONSUMIDOR FINAL";
@@ -890,16 +719,11 @@ export default function PosPage() {
                           <div key={s.id} className="rounded-2xl border border-gray-200 p-3">
                             <div className="flex items-start justify-between gap-3">
                               <div className="min-w-0">
-                                <div className="text-sm font-extrabold truncate">
-                                  {time} • {receipt}
-                                </div>
+                                <div className="text-sm font-extrabold truncate">{time} • {receipt}</div>
                                 <div className="text-xs text-gray-500 truncate">{custText}</div>
                                 <div className="mt-1 text-xs text-gray-600">{payText}</div>
                               </div>
-
-                              <div className="text-sm font-extrabold whitespace-nowrap">
-                                ${Number(s.total).toLocaleString("es-CO")}
-                              </div>
+                              <div className="text-sm font-extrabold whitespace-nowrap">${Number(s.total).toLocaleString("es-CO")}</div>
                             </div>
                           </div>
                         );
@@ -922,13 +746,12 @@ export default function PosPage() {
                       Total a pagar: <span className="font-bold">${total.toLocaleString("es-CO")}</span>
                     </div>
                   </div>
-                  <button className="btn" onClick={closePayModal} disabled={savingSale}>
-                    ✕
-                  </button>
+                  <button className="btn" onClick={closePayModal} disabled={savingSale}>✕</button>
                 </div>
 
-                {/* ✅ scroll interno para que NO se corte */}
                 <div className="card-b space-y-3 flex-1 overflow-auto">
+
+                  {/* Cliente */}
                   <div className="rounded-2xl border border-gray-200 p-3">
                     <div className="flex items-center justify-between">
                       <div className="text-sm font-extrabold">Cliente</div>
@@ -953,22 +776,14 @@ export default function PosPage() {
                           <div className="p-3 border-b border-gray-200">
                             <label className="grid gap-1">
                               <span className="label">Buscar</span>
-                              <input
-                                className="input"
-                                value={customerSearch}
-                                onChange={(e) => setCustomerSearch(e.target.value)}
-                                placeholder="Nombre, identificación, teléfono, email…"
-                                disabled={savingSale}
-                              />
+                              <input className="input" value={customerSearch} onChange={(e) => setCustomerSearch(e.target.value)} placeholder="Nombre, identificación…" disabled={savingSale} />
                             </label>
                           </div>
 
                           <div className="max-h-56 overflow-auto">
                             <button
                               type="button"
-                              className={`w-full text-left px-3 py-2 hover:bg-gray-50 text-sm ${
-                                selectedCustomer?.identification === "CF" ? "bg-gray-50" : ""
-                              }`}
+                              className={`w-full text-left px-3 py-2 hover:bg-gray-50 text-sm ${selectedCustomer?.identification === "CF" ? "bg-gray-50" : ""}`}
                               onClick={async () => {
                                 try {
                                   const cf = await ensureConsumidorFinal();
@@ -976,7 +791,7 @@ export default function PosPage() {
                                   setPayError(null);
                                   setIsCustomerDropdownOpen(false);
                                 } catch (e: any) {
-                                  setPayError(e?.message ?? "No se pudo seleccionar CONSUMIDOR FINAL.");
+                                  setPayError(e?.message ?? "Error.");
                                 }
                               }}
                               disabled={savingSale}
@@ -984,67 +799,32 @@ export default function PosPage() {
                               <div className="font-extrabold">CONSUMIDOR FINAL</div>
                               <div className="text-xs text-gray-500">Identificación: CF</div>
                             </button>
-
                             <div className="border-t border-gray-200" />
-
                             {filteredCustomers.map((c) => (
                               <button
                                 key={c.id}
                                 type="button"
-                                className={`w-full text-left px-3 py-2 hover:bg-gray-50 text-sm ${
-                                  selectedCustomerId === c.id ? "bg-gray-50" : ""
-                                }`}
-                                onClick={() => {
-                                  setSelectedCustomerId(c.id);
-                                  setPayError(null);
-                                  setIsCustomerDropdownOpen(false);
-                                }}
+                                className={`w-full text-left px-3 py-2 hover:bg-gray-50 text-sm ${selectedCustomerId === c.id ? "bg-gray-50" : ""}`}
+                                onClick={() => { setSelectedCustomerId(c.id); setPayError(null); setIsCustomerDropdownOpen(false); }}
                                 disabled={savingSale}
                               >
                                 <div className="font-extrabold">{c.name}</div>
-                                <div className="text-xs text-gray-500">
-                                  {c.identification} {c.phone ? `• ${c.phone}` : ""} {c.email ? `• ${c.email}` : ""}
-                                </div>
+                                <div className="text-xs text-gray-500">{c.identification}{c.phone ? ` • ${c.phone}` : ""}</div>
                               </button>
                             ))}
-
-                            {filteredCustomers.length === 0 && (
-                              <div className="px-3 py-3 text-sm text-gray-500">Sin resultados.</div>
-                            )}
+                            {filteredCustomers.length === 0 && <div className="px-3 py-3 text-sm text-gray-500">Sin resultados.</div>}
                           </div>
 
                           <div className="p-3 border-t border-gray-200">
-                            <button
-                              type="button"
-                              className="btn w-full"
-                              onClick={() => setShowCreateCustomer((v) => !v)}
-                              disabled={savingSale || creatingCustomer}
-                            >
+                            <button type="button" className="btn w-full" onClick={() => setShowCreateCustomer((v) => !v)} disabled={savingSale || creatingCustomer}>
                               {showCreateCustomer ? "Ocultar crear cliente" : "Crear cliente rápido"}
                             </button>
-
                             {showCreateCustomer && (
                               <div className="mt-3 rounded-2xl border border-gray-200 p-3 space-y-2">
-                                <label className="grid gap-1">
-                                  <span className="label">Identificación</span>
-                                  <input className="input" value={newCustId} onChange={(e) => setNewCustId(e.target.value)} disabled={savingSale} />
-                                </label>
-
-                                <label className="grid gap-1">
-                                  <span className="label">Nombre</span>
-                                  <input className="input" value={newCustName} onChange={(e) => setNewCustName(e.target.value)} disabled={savingSale} />
-                                </label>
-
-                                <label className="grid gap-1">
-                                  <span className="label">Teléfono (opcional)</span>
-                                  <input className="input" value={newCustPhone} onChange={(e) => setNewCustPhone(e.target.value)} disabled={savingSale} />
-                                </label>
-
-                                <label className="grid gap-1">
-                                  <span className="label">Email (opcional)</span>
-                                  <input className="input" value={newCustEmail} onChange={(e) => setNewCustEmail(e.target.value)} disabled={savingSale} />
-                                </label>
-
+                                <label className="grid gap-1"><span className="label">Identificación</span><input className="input" value={newCustId} onChange={(e) => setNewCustId(e.target.value)} disabled={savingSale} /></label>
+                                <label className="grid gap-1"><span className="label">Nombre</span><input className="input" value={newCustName} onChange={(e) => setNewCustName(e.target.value)} disabled={savingSale} /></label>
+                                <label className="grid gap-1"><span className="label">Teléfono (opcional)</span><input className="input" value={newCustPhone} onChange={(e) => setNewCustPhone(e.target.value)} disabled={savingSale} /></label>
+                                <label className="grid gap-1"><span className="label">Email (opcional)</span><input className="input" value={newCustEmail} onChange={(e) => setNewCustEmail(e.target.value)} disabled={savingSale} /></label>
                                 <button className="btn btn-primary w-full" onClick={createCustomerQuick} disabled={savingSale || creatingCustomer}>
                                   {creatingCustomer ? "Creando..." : "Crear cliente"}
                                 </button>
@@ -1056,6 +836,60 @@ export default function PosPage() {
                     </div>
                   </div>
 
+                  {/* ✅ CALCULADORA DE CAMBIO — solo aparece si pago es 100% efectivo o campo efectivo > 0 */}
+                  <div className="rounded-2xl border border-gray-200 p-3">
+                    <div className="mb-2 text-sm font-extrabold">Calculadora de cambio</div>
+                    <div className="text-xs text-gray-500 mb-3">
+                      Selecciona el billete con que paga el cliente.
+                    </div>
+
+                    {/* Botones de billetes */}
+                    <div className="flex gap-2">
+                      {BILLS.map((bill) => (
+                        <button
+                          key={bill}
+                          type="button"
+                          disabled={savingSale || bill < total}
+                          onClick={() => setSelectedBill(selectedBill === bill ? null : bill)}
+                          className={`flex-1 rounded-2xl border px-3 py-2 text-sm font-extrabold transition
+                            ${selectedBill === bill
+                              ? "border-emerald-500 bg-emerald-50 text-emerald-700"
+                              : bill < total
+                                ? "border-gray-200 bg-gray-50 text-gray-300 cursor-not-allowed"
+                                : "border-gray-200 bg-white text-gray-700 hover:border-gray-400"
+                            }`}
+                        >
+                          ${bill.toLocaleString("es-CO")}
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Resultado cambio */}
+                    {selectedBill !== null && billChange !== null && (
+                      <div className="mt-3 rounded-2xl border border-emerald-200 bg-emerald-50 p-3">
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm text-emerald-700">Billete</span>
+                          <span className="text-sm font-extrabold text-emerald-800">
+                            ${selectedBill.toLocaleString("es-CO")}
+                          </span>
+                        </div>
+                        <div className="mt-1 flex items-center justify-between">
+                          <span className="text-sm text-emerald-700">Total venta</span>
+                          <span className="text-sm font-extrabold text-emerald-800">
+                            ${total.toLocaleString("es-CO")}
+                          </span>
+                        </div>
+                        <div className="mt-2 flex items-center justify-between border-t border-emerald-200 pt-2">
+                          <span className="text-base font-extrabold text-emerald-700">Cambio</span>
+                          <span className="text-xl font-black text-emerald-700">
+                            ${billChange.toLocaleString("es-CO")}
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Métodos de pago */}
                   <PayInput label="Efectivo" value={cash} setValue={setCash} disabled={savingSale} />
                   <PayInput label="Tarjeta" value={card} setValue={setCard} disabled={savingSale} />
                   <PayInput label="Transferencia" value={transfer} setValue={setTransfer} disabled={savingSale} />
@@ -1068,9 +902,7 @@ export default function PosPage() {
                   {payError && <div className="alert-err whitespace-pre-line">{payError}</div>}
 
                   <div className="flex gap-2 pt-2">
-                    <button className="btn flex-1" onClick={closePayModal} disabled={savingSale}>
-                      Cancelar
-                    </button>
+                    <button className="btn flex-1" onClick={closePayModal} disabled={savingSale}>Cancelar</button>
                     <button className="btn btn-primary flex-1" onClick={saveSale} disabled={savingSale}>
                       {savingSale ? "Guardando..." : "Confirmar pago"}
                     </button>
@@ -1084,12 +916,7 @@ export default function PosPage() {
           {printingSaleId && (
             <PrintPortal>
               <div className="print-layer">
-                <TicketInline
-                  saleId={printingSaleId}
-                  onPrinted={() => {
-                    setPrintingSaleId(null);
-                  }}
-                />
+                <TicketInline saleId={printingSaleId} onPrinted={() => setPrintingSaleId(null)} />
               </div>
             </PrintPortal>
           )}
@@ -1110,15 +937,7 @@ function Section({ title }: { title: string }) {
   );
 }
 
-function ProductsGrid({
-  products,
-  onClick,
-  disabled,
-}: {
-  products: PosProduct[];
-  onClick: (p: PosProduct) => void;
-  disabled: boolean;
-}) {
+function ProductsGrid({ products, onClick, disabled }: { products: PosProduct[]; onClick: (p: PosProduct) => void; disabled: boolean }) {
   return (
     <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 xl:grid-cols-4">
       {products.map((p) => (
@@ -1135,7 +954,6 @@ function ProductsGrid({
               <div className="text-xs text-gray-400 font-semibold">Sin imagen</div>
             )}
           </div>
-
           <div className="mt-3">
             <div className="font-extrabold leading-tight line-clamp-2">{p.name}</div>
             <div className="text-sm text-gray-500">${p.price.toLocaleString("es-CO")}</div>
@@ -1155,55 +973,20 @@ function TotalsRow({ label, value, bold }: { label: string; value: number; bold?
   );
 }
 
-function PayInput({
-  label,
-  value,
-  setValue,
-  disabled,
-}: {
-  label: string;
-  value: string;
-  setValue: (v: string) => void;
-  disabled: boolean;
-}) {
-  // Formatea la parte entera con separador de miles (puntos)
-  // y conserva la parte decimal con coma
-  // Ej: "5400.64" → "5.400,64"
+function PayInput({ label, value, setValue, disabled }: { label: string; value: string; setValue: (v: string) => void; disabled: boolean }) {
   const formatDisplay = (raw: string) => {
-    if (!raw || raw === "0") return "";
-
-    // Normaliza: reemplaza coma decimal por punto para trabajar internamente
-    const normalized = raw.replace(",", ".");
-
-    const [intPart, decPart] = normalized.split(".");
-
-    const intFormatted = intPart
-      ? Number(intPart).toLocaleString("es-CO")
-      : "0";
-
-    if (decPart !== undefined) {
-      // Tiene decimales (incluso si está vacío, ej: el usuario escribió la coma)
-      return `${intFormatted},${decPart}`;
-    }
-
+    if (!raw) return "";
+    const withDot = raw.replace(",", ".");
+    const [intPart, decPart] = withDot.split(".");
+    const intFormatted = intPart ? Number(intPart).toLocaleString("es-CO") : "0";
+    if (decPart !== undefined) return `${intFormatted},${decPart}`;
     return intFormatted;
   };
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const raw = e.target.value;
-
-    // Quita los puntos de miles que el formato agrega
-    // pero conserva la coma decimal
-    const cleaned = raw
-      .replace(/\./g, "")   // quita separadores de miles
-      .replace(",", ".");   // convierte coma decimal → punto (para parseFloat)
-
-    // Solo permite dígitos, un punto decimal y máx 2 decimales
-    const valid = cleaned.match(/^\d*\.?\d{0,2}$/);
-    if (!valid) return;
-
-    // Guarda en formato "5400.64" internamente
-    setValue(cleaned);
+    const raw = e.target.value.replace(/\./g, "").replace(",", ".");
+    if (!/^\d*\.?\d{0,2}$/.test(raw)) return;
+    setValue(raw);
   };
 
   return (
@@ -1224,13 +1007,7 @@ function PayInput({
 
 /** ===================== Ticket printing ===================== */
 
-function TicketInline({
-  saleId,
-  onPrinted,
-}: {
-  saleId: string;
-  onPrinted: () => void;
-}) {
+function TicketInline({ saleId, onPrinted }: { saleId: string; onPrinted: () => void }) {
   const [sale, setSale] = useState<any>(null);
   const [items, setItems] = useState<any[]>([]);
   const [payments, setPayments] = useState<any[]>([]);
@@ -1265,10 +1042,7 @@ function TicketInline({
       setItems(itemsRows ?? []);
       setPayments(payRows ?? []);
 
-      setTimeout(() => {
-        window.print();
-        setTimeout(() => onPrinted(), 500);
-      }, 300);
+      setTimeout(() => { window.print(); setTimeout(() => onPrinted(), 500); }, 300);
     };
 
     run();
@@ -1278,22 +1052,16 @@ function TicketInline({
 
   const totalQty = items.reduce((acc, it) => acc + Number(it.qty ?? 0), 0);
   const totalPayments = payments.reduce((acc, p) => acc + Number(p.amount ?? 0), 0);
-
   const receipt = sale.receipt_number
     ? `LF-${String(sale.receipt_number).padStart(6, "0")}`
     : String(sale.id).slice(0, 8).toUpperCase();
-
   const branchName = sale.branches?.name ?? "Sucursal";
 
   return (
     <div className="ticket">
-  <div className="center">
-    <img
-      src="/logo.png"
-      alt="logo"
-      style={{ width: "120px", marginBottom: "8px" }}
-    />
-  </div>
+      <div className="center">
+        <img src="/logo.png" alt="logo" style={{ width: "120px", marginBottom: "8px" }} />
+      </div>
 
       <div className="center bold">CASA DEL KUMIS</div>
       <div className="center">NIT: 901192245-9</div>
@@ -1310,9 +1078,7 @@ function TicketInline({
       {items.map((it, i) => (
         <div key={i} className="item">
           <div className="row">
-            <div className="left">
-              {it.qty} x {it.products?.name ?? "Producto"}
-            </div>
+            <div className="left">{it.qty} x {it.products?.name ?? "Producto"}</div>
             <div className="right">${Number(it.line_total).toLocaleString("es-CO")}</div>
           </div>
           <div className="muted">Unit: ${Number(it.unit_price).toLocaleString("es-CO")}</div>
@@ -1321,23 +1087,10 @@ function TicketInline({
 
       <div className="line" />
 
-      <div className="row">
-        <div className="left">Subtotal</div>
-        <div className="right">${Number(sale.subtotal).toLocaleString("es-CO")}</div>
-      </div>
-      <div className="row">
-        <div className="left">Impoconsumo</div>
-        <div className="right">${Number(sale.tax_total).toLocaleString("es-CO")}</div>
-      </div>
-      <div className="row bold">
-        <div className="left">TOTAL</div>
-        <div className="right">${Number(sale.total).toLocaleString("es-CO")}</div>
-      </div>
-
-      <div className="row">
-        <div className="left">Total artículos</div>
-        <div className="right">{totalQty}</div>
-      </div>
+      <div className="row"><div className="left">Subtotal</div><div className="right">${Number(sale.subtotal).toLocaleString("es-CO")}</div></div>
+      <div className="row"><div className="left">Impoconsumo</div><div className="right">${Number(sale.tax_total).toLocaleString("es-CO")}</div></div>
+      <div className="row bold"><div className="left">TOTAL</div><div className="right">${Number(sale.total).toLocaleString("es-CO")}</div></div>
+      <div className="row"><div className="left">Total artículos</div><div className="right">{totalQty}</div></div>
 
       <div className="line" />
 
@@ -1348,10 +1101,7 @@ function TicketInline({
           <div className="right">${Number(p.amount).toLocaleString("es-CO")}</div>
         </div>
       ))}
-      <div className="row bold">
-        <div className="left">TOTAL PAGOS</div>
-        <div className="right">${Number(totalPayments).toLocaleString("es-CO")}</div>
-      </div>
+      <div className="row bold"><div className="left">TOTAL PAGOS</div><div className="right">${Number(totalPayments).toLocaleString("es-CO")}</div></div>
 
       <div className="line" />
       <div className="center">Gracias por su compra</div>
