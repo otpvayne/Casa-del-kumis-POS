@@ -131,13 +131,13 @@ body {
 
 @page {
   size: 80mm auto;
-  margin: 2mm 2mm 0 2mm;
+  margin: 2mm 3mm 0 3mm;
 }
 
 @media print {
   @page {
     size: 80mm auto;
-    margin: 2mm 2mm 0 2mm;
+    margin: 2mm 3mm 0 3mm;
   }
 
   html,
@@ -194,6 +194,7 @@ body {
   font-size: 11px;
   width: 76mm;
   line-height: 1.2;
+  padding-left: 2mm;
 }
 .ticket .center {
   text-align: center;
