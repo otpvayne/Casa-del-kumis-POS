@@ -32,6 +32,7 @@ export default function AdminProductsPage() {
 
   // crear producto
   const [newName, setNewName] = useState("");
+  const [newPrice, setNewPrice] = useState<string>(""); // ✅ precio al crear
   const [creating, setCreating] = useState(false);
 
   // imagen (crear)
@@ -39,7 +40,7 @@ export default function AdminProductsPage() {
   const [newImagePreview, setNewImagePreview] = useState<string | null>(null);
   const [uploadingImage, setUploadingImage] = useState(false);
 
-  // ✅ editar producto
+  // editar producto
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [editName, setEditName] = useState("");
   const [editImageFile, setEditImageFile] = useState<File | null>(null);
@@ -123,7 +124,7 @@ export default function AdminProductsPage() {
     return () => URL.revokeObjectURL(url);
   }, [newImageFile]);
 
-  // ✅ preview imagen edición
+  // preview imagen edición
   useEffect(() => {
     if (!editImageFile) { setEditImagePreview(null); return; }
     const url = URL.createObjectURL(editImageFile);
@@ -133,6 +134,7 @@ export default function AdminProductsPage() {
 
   const resetCreateForm = () => {
     setNewName("");
+    setNewPrice(""); // ✅
     setNewImageFile(null);
     setNewImagePreview(null);
   };
@@ -180,9 +182,20 @@ export default function AdminProductsPage() {
     }
   };
 
+  const toNum = (v: string) => {
+    if (!v) return 0;
+    let cleaned = v.trim().replace(/\./g, "").replace(",", ".");
+    const n = Number(cleaned);
+    return Number.isNaN(n) ? 0 : n;
+  };
+
+  // ✅ Crear producto y asignar automáticamente a todas las sucursales
   const createProduct = async () => {
     const name = newName.trim();
     if (!name) return setErr("Nombre obligatorio.");
+
+    const price = toNum(newPrice);
+    if (price <= 0) return setErr("El precio debe ser mayor a 0.");
 
     setErr(null);
     setCreating(true);
@@ -193,6 +206,7 @@ export default function AdminProductsPage() {
         image_url = await uploadProductImage(newImageFile, setUploadingImage);
       }
 
+      // 1. Crear el producto
       const { data, error } = await supabase
         .from("products")
         .insert({ name, image_url })
@@ -200,6 +214,43 @@ export default function AdminProductsPage() {
         .single();
 
       if (error || !data) throw new Error(error?.message ?? "Error creando producto.");
+
+      // 2. ✅ Asignar a TODAS las sucursales automáticamente
+      if (branches.length > 0) {
+        const assignments = branches.map((b) => ({
+          branch_id: b.id,
+          product_id: data.id,
+          price,
+          is_active: true,
+          is_favorite: false,
+        }));
+
+        const { error: assignErr } = await supabase
+          .from("branch_products")
+          .insert(assignments);
+
+        if (assignErr) throw new Error(assignErr.message);
+
+        // Actualizar estado local con los registros recién creados
+        const { data: newBps } = await supabase
+          .from("branch_products")
+          .select("id,branch_id,product_id,price,is_active,is_favorite")
+          .eq("product_id", data.id);
+
+        if (newBps) {
+          setBranchProducts((prev) => [
+            ...prev,
+            ...newBps.map((x: any) => ({
+              id: x.id,
+              branch_id: x.branch_id,
+              product_id: x.product_id,
+              price: Number(x.price ?? 0),
+              is_active: Boolean(x.is_active),
+              is_favorite: Boolean(x.is_favorite),
+            })),
+          ]);
+        }
+      }
 
       setProducts((prev) =>
         [...prev, { id: data.id, name: data.name, image_url: data.image_url ?? null }].sort((a, b) =>
@@ -215,7 +266,7 @@ export default function AdminProductsPage() {
     }
   };
 
-  // ✅ abrir modal de edición
+  // abrir modal de edición
   const openEdit = (p: Product) => {
     setEditingProduct(p);
     setEditName(p.name);
@@ -224,7 +275,7 @@ export default function AdminProductsPage() {
     setErr(null);
   };
 
-  // ✅ guardar cambios del producto
+  // guardar cambios del producto
   const updateProduct = async () => {
     if (!editingProduct) return;
     const name = editName.trim();
@@ -259,13 +310,6 @@ export default function AdminProductsPage() {
     } finally {
       setUpdating(false);
     }
-  };
-
-  const toNum = (v: string) => {
-    if (!v) return 0;
-    let cleaned = v.trim().replace(/\./g, "").replace(",", ".");
-    const n = Number(cleaned);
-    return Number.isNaN(n) ? 0 : n;
   };
 
   const assignToBranch = async () => {
@@ -434,7 +478,7 @@ export default function AdminProductsPage() {
       >
         {err && <div className="alert-err mb-4">{err}</div>}
 
-        {/* ✅ MODAL DE EDICIÓN */}
+        {/* MODAL DE EDICIÓN */}
         {editingProduct && (
           <div
             className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
@@ -463,9 +507,7 @@ export default function AdminProductsPage() {
 
                 <div className="grid gap-2">
                   <span className="label">Imagen</span>
-
                   <div className="grid gap-3 sm:grid-cols-[120px_1fr] items-start">
-                    {/* preview: muestra la nueva si hay, si no la actual */}
                     <div className="w-full aspect-square rounded-2xl border border-gray-200 bg-gray-50 overflow-hidden flex items-center justify-center">
                       {editImagePreview ? (
                         <img src={editImagePreview} alt="Preview nueva" className="w-full h-full object-contain" />
@@ -475,7 +517,6 @@ export default function AdminProductsPage() {
                         <div className="text-xs text-gray-400 font-semibold">Sin imagen</div>
                       )}
                     </div>
-
                     <div className="grid gap-2">
                       <input
                         type="file"
@@ -485,22 +526,13 @@ export default function AdminProductsPage() {
                         disabled={updating || uploadingEditImage}
                       />
                       {editingProduct.image_url && !editImageFile && (
-                        <div className="text-xs text-gray-500">
-                          Elige una nueva imagen para reemplazar la actual.
-                        </div>
+                        <div className="text-xs text-gray-500">Elige una nueva imagen para reemplazar la actual.</div>
                       )}
                       {!editingProduct.image_url && !editImageFile && (
-                        <div className="text-xs text-gray-500">
-                          Este producto no tiene imagen. Puedes agregar una ahora.
-                        </div>
+                        <div className="text-xs text-gray-500">Este producto no tiene imagen. Puedes agregar una ahora.</div>
                       )}
                       {editImageFile && (
-                        <button
-                          type="button"
-                          className="btn btn-ghost"
-                          onClick={() => setEditImageFile(null)}
-                          disabled={updating}
-                        >
+                        <button type="button" className="btn btn-ghost" onClick={() => setEditImageFile(null)} disabled={updating}>
                           Quitar nueva imagen
                         </button>
                       )}
@@ -510,11 +542,7 @@ export default function AdminProductsPage() {
 
                 {err && <div className="alert-err">{err}</div>}
 
-                <button
-                  className="btn btn-primary w-full"
-                  onClick={updateProduct}
-                  disabled={updating || uploadingEditImage}
-                >
+                <button className="btn btn-primary w-full" onClick={updateProduct} disabled={updating || uploadingEditImage}>
                   {uploadingEditImage ? "Subiendo imagen..." : updating ? "Guardando..." : "Guardar cambios"}
                 </button>
               </div>
@@ -529,7 +557,9 @@ export default function AdminProductsPage() {
               <div className="card-h flex items-center justify-between">
                 <div>
                   <div className="text-lg font-extrabold">Crear producto</div>
-                  <div className="text-sm text-gray-500">Agrega un producto al catálogo con foto opcional.</div>
+                  <div className="text-sm text-gray-500">
+                    Se asigna automáticamente a todas las sucursales con el precio indicado.
+                  </div>
                 </div>
                 <span className="badge">Catálogo</span>
               </div>
@@ -542,7 +572,28 @@ export default function AdminProductsPage() {
                     onChange={(e) => setNewName(e.target.value)}
                     placeholder="Ej: Kumis natural 250ml"
                     className="input"
+                    disabled={creating || uploadingImage}
                   />
+                </label>
+
+                {/* ✅ Campo precio */}
+                <label className="grid gap-1">
+                  <span className="label">Precio (todas las sucursales)</span>
+                  <input
+                    value={newPrice}
+                    onChange={(e) => setNewPrice(e.target.value)}
+                    type="text"
+                    inputMode="numeric"
+                    pattern="[0-9.,]*"
+                    placeholder="Ej: 5.000"
+                    className="input"
+                    disabled={creating || uploadingImage}
+                  />
+                  <div className="text-xs text-gray-500">
+                    Vista previa: <span className="font-extrabold text-gray-900">
+                      ${toNum(newPrice).toLocaleString("es-CO")}
+                    </span>
+                  </div>
                 </label>
 
                 <div className="grid gap-2">
@@ -559,7 +610,6 @@ export default function AdminProductsPage() {
                       </button>
                     )}
                   </div>
-
                   <div className="grid gap-3 sm:grid-cols-[120px_1fr] items-start">
                     <div className="w-full aspect-square rounded-2xl border border-gray-200 bg-gray-50 overflow-hidden flex items-center justify-center">
                       {newImagePreview ? (
@@ -568,7 +618,6 @@ export default function AdminProductsPage() {
                         <div className="text-xs text-gray-400 font-semibold">Sin imagen</div>
                       )}
                     </div>
-
                     <div className="grid gap-2">
                       <input
                         type="file"
@@ -577,9 +626,7 @@ export default function AdminProductsPage() {
                         onChange={(e) => { const f = e.target.files?.[0] ?? null; setNewImageFile(f); }}
                         disabled={creating || uploadingImage}
                       />
-                      <div className="text-xs text-gray-500">
-                        Recomendado: PNG/JPG/WebP. Máx 6MB.
-                      </div>
+                      <div className="text-xs text-gray-500">Recomendado: PNG/JPG/WebP. Máx 6MB.</div>
                     </div>
                   </div>
                 </div>
@@ -589,11 +636,11 @@ export default function AdminProductsPage() {
                   onClick={createProduct}
                   disabled={creating || uploadingImage}
                 >
-                  {uploadingImage ? "Subiendo imagen..." : creating ? "Creando..." : "Crear producto"}
+                  {uploadingImage ? "Subiendo imagen..." : creating ? "Creando y asignando..." : "Crear producto"}
                 </button>
 
                 <div className="text-xs text-gray-500">
-                  Tip: si el producto ya tuvo ventas, no se puede borrar. Desactívalo.
+                  El producto quedará activo en todas las sucursales. Desactívalo por sucursal desde la tabla de la derecha.
                 </div>
               </div>
             </div>
@@ -623,17 +670,11 @@ export default function AdminProductsPage() {
                             <div className="flex items-start gap-3 min-w-0">
                               <div className="h-12 w-12 rounded-2xl border border-gray-200 bg-gray-50 overflow-hidden flex items-center justify-center flex-shrink-0">
                                 {p.image_url ? (
-                                  <img
-                                    src={p.image_url}
-                                    alt={p.name}
-                                    className="w-full h-full object-contain"
-                                    loading="lazy"
-                                  />
+                                  <img src={p.image_url} alt={p.name} className="w-full h-full object-contain" loading="lazy" />
                                 ) : (
                                   <div className="text-[10px] text-gray-400 font-bold">IMG</div>
                                 )}
                               </div>
-
                               <div className="min-w-0">
                                 <div className="font-extrabold truncate">{p.name}</div>
                                 <div className="mt-1 text-xs text-gray-500">
@@ -643,31 +684,13 @@ export default function AdminProductsPage() {
                             </div>
 
                             <div className="flex flex-wrap gap-2 justify-end flex-shrink-0">
-                              {/* ✅ botón editar */}
-                              <button
-                                className="btn"
-                                onClick={() => openEdit(p)}
-                                disabled={busyDeleting || busyDeact}
-                                title="Editar nombre e imagen"
-                              >
+                              <button className="btn" onClick={() => openEdit(p)} disabled={busyDeleting || busyDeact} title="Editar nombre e imagen">
                                 Editar
                               </button>
-
-                              <button
-                                className="btn"
-                                onClick={() => deactivateEverywhere(p.id)}
-                                disabled={busyDeact}
-                                title="Lo saca del POS en todas las sucursales"
-                              >
+                              <button className="btn" onClick={() => deactivateEverywhere(p.id)} disabled={busyDeact} title="Lo saca del POS en todas las sucursales">
                                 {busyDeact ? "Desactivando..." : "Desactivar"}
                               </button>
-
-                              <button
-                                className="btn btn-primary"
-                                onClick={() => deleteProduct(p.id)}
-                                disabled={busyDeleting}
-                                title="Solo borra si NO hay ventas"
-                              >
+                              <button className="btn btn-primary" onClick={() => deleteProduct(p.id)} disabled={busyDeleting} title="Solo borra si NO hay ventas">
                                 {busyDeleting ? "Eliminando..." : "Eliminar"}
                               </button>
                             </div>
@@ -687,7 +710,7 @@ export default function AdminProductsPage() {
               <div className="card-h flex items-center justify-between">
                 <div>
                   <div className="text-lg font-extrabold">Configurar por sucursal</div>
-                  <div className="text-sm text-gray-500">Asigna productos y define precio por sede.</div>
+                  <div className="text-sm text-gray-500">Ajusta precio, activo y favorito por sede.</div>
                 </div>
                 <span className="badge">Sucursales</span>
               </div>
@@ -696,36 +719,25 @@ export default function AdminProductsPage() {
                 <div className="flex flex-wrap items-end gap-3">
                   <label className="grid gap-1">
                     <span className="label">Sucursal</span>
-                    <select
-                      value={selectedBranchId}
-                      onChange={(e) => setSelectedBranchId(e.target.value)}
-                      className="input"
-                    >
+                    <select value={selectedBranchId} onChange={(e) => setSelectedBranchId(e.target.value)} className="input">
                       {branches.map((b) => (
                         <option key={b.id} value={b.id}>{b.name}</option>
                       ))}
                     </select>
                   </label>
-
                   <div className="ml-auto text-xs text-gray-500">Tip: favoritos aparecen primero en el POS.</div>
                 </div>
 
                 <div className="rounded-2xl border border-gray-200 p-4">
-                  <div className="text-sm font-extrabold">Asignar producto</div>
+                  <div className="text-sm font-extrabold">Asignar producto manualmente</div>
                   <div className="mt-1 text-xs text-gray-500">Si ya existe, se actualiza y se activa.</div>
-
                   <div className="mt-3 flex flex-wrap gap-2">
-                    <select
-                      value={assignProductId}
-                      onChange={(e) => setAssignProductId(e.target.value)}
-                      className="input min-w-[220px]"
-                    >
+                    <select value={assignProductId} onChange={(e) => setAssignProductId(e.target.value)} className="input min-w-[220px]">
                       <option value="">Selecciona producto…</option>
                       {products.map((p) => (
                         <option key={p.id} value={p.id}>{p.name}</option>
                       ))}
                     </select>
-
                     <input
                       value={assignPrice}
                       onChange={(e) => setAssignPrice(e.target.value)}
@@ -734,7 +746,6 @@ export default function AdminProductsPage() {
                       placeholder="Precio"
                       className="input w-40"
                     />
-
                     <button className="btn btn-primary" onClick={assignToBranch} disabled={assigning}>
                       {assigning ? "Asignando..." : "Asignar / Activar"}
                     </button>
@@ -780,7 +791,6 @@ export default function AdminProductsPage() {
                           </td>
                         </tr>
                       ))}
-
                       {rowsForBranch.length === 0 && (
                         <tr>
                           <td className="p-4 text-sm text-gray-500" colSpan={4}>

@@ -98,6 +98,20 @@ export default function PosPage() {
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [historySales, setHistorySales] = useState<SaleHistoryRow[]>([]);
   const [historyPaymentsBySale, setHistoryPaymentsBySale] = useState<Record<string, PaymentRow[]>>({});
+  const [historyOpeningCash, setHistoryOpeningCash] = useState<number | null>(null);
+  // ✅ Verificación de entrega de caja
+const [shiftVerification, setShiftVerification] = useState<{
+  verified_at: string;
+  verified_by_name: string;
+  opening_cash: number;
+  sales_total: number;
+  expected_total: number;
+  sales_count: number;
+} | null>(null);
+const [showVerifyForm, setShowVerifyForm] = useState(false);
+const [verifyName, setVerifyName] = useState("");
+const [verifying, setVerifying] = useState(false);
+const [verifyError, setVerifyError] = useState<string | null>(null);
 
   const loadTaxRate = async () => {
     try {
@@ -436,8 +450,15 @@ export default function PosPage() {
           : null,
       }));
       setHistorySales(mappedSales);
-
+      // ✅ Traer opening_cash del turno
+      const { data: shiftRow } = await supabase
+        .from("shifts")
+        .select("opening_cash")
+        .eq("id", shiftId)
+        .single();
+      setHistoryOpeningCash(Number(shiftRow?.opening_cash ?? 0));
       const saleIds = mappedSales.map((s) => s.id);
+
       if (saleIds.length === 0) { setHistoryPaymentsBySale({}); setHistoryLoading(false); return; }
 
       const { data: payRows, error: payErr } = await supabase
@@ -453,6 +474,21 @@ export default function PosPage() {
         grouped[sid].push({ method: p.method as PaymentMethod, amount: Number(p.amount ?? 0) });
       });
       setHistoryPaymentsBySale(grouped);
+      // ✅ Cargar verificación existente del turno
+const { data: verif } = await supabase
+  .from("shift_verifications")
+  .select("verified_at, verified_by_name, opening_cash, sales_total, expected_total, sales_count")
+  .eq("shift_id", shiftId)
+  .maybeSingle();
+
+setShiftVerification(verif ? {
+  verified_at: String(verif.verified_at),
+  verified_by_name: String(verif.verified_by_name),
+  opening_cash: Number(verif.opening_cash ?? 0),
+  sales_total: Number(verif.sales_total ?? 0),
+  expected_total: Number(verif.expected_total ?? 0),
+  sales_count: Number(verif.sales_count ?? 0),
+} : null);
       setHistoryLoading(false);
     } catch (e: any) {
       setHistoryLoading(false);
@@ -462,7 +498,63 @@ export default function PosPage() {
 
   const openHistoryModal = async () => { setShowHistory(true); await loadShiftHistory(); };
   const closeHistoryModal = () => setShowHistory(false);
+  const saveVerification = async () => {
+  if (!shiftId || !branchId) return;
+  const name = verifyName.trim();
+  if (!name) return setVerifyError("Debes ingresar tu nombre.");
 
+  setVerifyError(null);
+  setVerifying(true);
+
+  try {
+    // Snapshot de los valores actuales
+    const { data, error: rpcErr } = await supabase
+      .rpc("get_shift_totals", { p_shift_id: shiftId });
+    if (rpcErr) throw new Error(rpcErr.message);
+    const row = Array.isArray(data) ? data[0] : data;
+
+    const { data: sh } = await supabase
+      .from("shifts")
+      .select("opening_cash")
+      .eq("id", shiftId)
+      .single();
+
+    const opening_cash = Number(sh?.opening_cash ?? 0);
+    const sales_total = Number(row?.expected_total ?? 0) - opening_cash;
+    const expected_total = Number(row?.expected_total ?? 0);
+    const sales_count = Number(row?.sales_count ?? 0);
+
+    const { error: insErr } = await supabase
+      .from("shift_verifications")
+      .insert({
+        shift_id: shiftId,
+        branch_id: branchId,
+        verified_by_name: name,
+        opening_cash,
+        sales_total,
+        expected_total,
+        sales_count,
+      });
+
+    if (insErr) throw new Error(insErr.message);
+
+    setShiftVerification({
+      verified_at: new Date().toISOString(),
+      verified_by_name: name,
+      opening_cash,
+      sales_total,
+      expected_total,
+      sales_count,
+    });
+
+    setShowVerifyForm(false);
+    setVerifyName("");
+  } catch (e: any) {
+    setVerifyError(e.message ?? "No se pudo guardar la verificación.");
+  } finally {
+    setVerifying(false);
+  }
+};
   const methodLabel = (m: string) => {
     if (m === "CASH") return "EFECTIVO";
     if (m === "CARD") return "TARJETA";
@@ -688,15 +780,116 @@ export default function PosPage() {
 
                 <div className="card-b flex-1 overflow-auto space-y-3">
                   {historyError && <div className="alert-err">{historyError}</div>}
-                  <div className="rounded-2xl border border-gray-200 p-3 bg-white">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div className="text-sm"><span className="font-extrabold">Ventas:</span> {historySales.length}</div>
-                      <div className="text-sm">
-                        <span className="font-extrabold">Total vendido:</span>{" "}
-                        ${historySales.reduce((acc, s) => acc + Number(s.total ?? 0), 0).toLocaleString("es-CO")}
-                      </div>
-                    </div>
-                  </div>
+                  <div className="rounded-2xl border border-gray-200 p-3 bg-white space-y-2">
+  {/* Resumen numérico */}
+  <div className="flex flex-wrap items-center justify-between gap-2">
+    <div className="text-sm">
+      <span className="font-extrabold">Ventas:</span> {historySales.length}
+    </div>
+    <div className="text-sm">
+      <span className="font-extrabold">Total vendido:</span>{" "}
+      ${historySales.reduce((acc, s) => acc + Number(s.total ?? 0), 0).toLocaleString("es-CO")}
+    </div>
+  </div>
+
+  {historyOpeningCash !== null && (
+    <div className="flex items-center justify-between border-t border-gray-100 pt-2">
+      <span className="text-sm text-gray-500">Base al abrir turno</span>
+      <span className="text-sm font-extrabold text-gray-800">
+        ${historyOpeningCash.toLocaleString("es-CO")}
+      </span>
+    </div>
+  )}
+
+  {/* ✅ Verificación de entrega */}
+  <div className="border-t border-gray-100 pt-2">
+    {shiftVerification ? (
+      // Ya fue verificado — mostrar constancia
+      <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-3 space-y-1">
+        <div className="flex items-center gap-2">
+          <span className="text-emerald-700 font-extrabold text-sm">✓ Entrega verificada</span>
+        </div>
+        <div className="text-xs text-emerald-700">
+          <span className="font-bold">Cajero:</span> {shiftVerification.verified_by_name}
+        </div>
+        <div className="text-xs text-emerald-700">
+          <span className="font-bold">Hora:</span>{" "}
+          {new Date(shiftVerification.verified_at).toLocaleString("es-CO")}
+        </div>
+        <div className="text-xs text-emerald-700">
+          <span className="font-bold">Base:</span> ${shiftVerification.opening_cash.toLocaleString("es-CO")}
+          {"  •  "}
+          <span className="font-bold">Ventas:</span> ${shiftVerification.sales_total.toLocaleString("es-CO")}
+          {"  •  "}
+          <span className="font-bold">Total:</span> ${shiftVerification.expected_total.toLocaleString("es-CO")}
+        </div>
+        <div className="text-xs text-emerald-600 opacity-75">
+          El cajero confirmó que los valores eran correctos al momento de la verificación.
+        </div>
+      </div>
+    ) : showVerifyForm ? (
+      // Formulario de verificación
+      <div className="rounded-2xl border border-gray-200 p-3 space-y-3">
+        <div className="text-sm font-extrabold">Verificar entrega de caja</div>
+        <div className="text-xs text-gray-500">
+          Al verificar confirmas que los valores actuales (base + ventas) son correctos
+          y aceptas responsabilidad desde este momento.
+        </div>
+
+        <label className="grid gap-1">
+          <span className="label">Tu nombre</span>
+          <input
+            className="input"
+            value={verifyName}
+            onChange={(e) => setVerifyName(e.target.value)}
+            placeholder="Ej: Juan Pérez"
+            disabled={verifying}
+          />
+        </label>
+
+        {/* Snapshot de valores actuales */}
+        <div className="rounded-2xl border border-gray-200 bg-gray-50 p-3 space-y-1">
+          <div className="text-xs font-extrabold text-gray-600 mb-1">Valores al momento de verificar:</div>
+          <div className="flex justify-between text-xs">
+            <span className="text-gray-500">Base de caja</span>
+            <span className="font-bold">${(historyOpeningCash ?? 0).toLocaleString("es-CO")}</span>
+          </div>
+          <div className="flex justify-between text-xs">
+            <span className="text-gray-500">Total ventas</span>
+            <span className="font-bold">
+              ${historySales.reduce((acc, s) => acc + Number(s.total ?? 0), 0).toLocaleString("es-CO")}
+            </span>
+          </div>
+          <div className="flex justify-between text-xs border-t border-gray-200 pt-1 mt-1">
+            <span className="text-gray-700 font-bold">Total esperado en caja</span>
+            <span className="font-extrabold">
+              ${((historyOpeningCash ?? 0) + historySales.reduce((acc, s) => acc + Number(s.total ?? 0), 0)).toLocaleString("es-CO")}
+            </span>
+          </div>
+        </div>
+
+        {verifyError && <div className="alert-err">{verifyError}</div>}
+
+        <div className="flex gap-2">
+          <button className="btn flex-1" onClick={() => { setShowVerifyForm(false); setVerifyName(""); setVerifyError(null); }} disabled={verifying}>
+            Cancelar
+          </button>
+          <button className="btn btn-primary flex-1" onClick={saveVerification} disabled={verifying}>
+            {verifying ? "Guardando..." : "Confirmar verificación"}
+          </button>
+        </div>
+      </div>
+    ) : (
+      // Botón para iniciar verificación
+      <button
+        className="btn w-full"
+        onClick={() => { setShowVerifyForm(true); setVerifyError(null); }}
+      >
+        Verificar entrega de caja
+      </button>
+    )}
+  </div>
+</div>
 
                   {historyLoading ? (
                     <div className="text-sm text-gray-500">Cargando historial…</div>

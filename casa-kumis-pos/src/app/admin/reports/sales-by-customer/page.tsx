@@ -5,6 +5,7 @@ import { supabase } from "@/lib/supabaseClient";
 import { useRouter } from "next/navigation";
 import { requireRole } from "@/lib/requireRole";
 import PageShell from "@/components/PageShell";
+import * as XLSX from "xlsx";
 
 type Granularity = "MONTH" | "QUARTER" | "SEMESTER" | "YEAR";
 
@@ -46,14 +47,10 @@ export default function SalesByCustomerReportPage() {
   const [granularity, setGranularity] = useState<Granularity>("MONTH");
   const [rows, setRows] = useState<ReportRow[]>([]);
 
-  // ✅ Admin guard consistente
   useEffect(() => {
     const run = async () => {
       const res = await requireRole("ADMIN");
-      if (!res.ok) {
-        router.replace("/pos");
-        return;
-      }
+      if (!res.ok) { router.replace("/pos"); return; }
       setLoadingAuth(false);
     };
     run().catch((e: any) => {
@@ -111,9 +108,7 @@ export default function SalesByCustomerReportPage() {
       },
       { valor_bruto: 0, subtotal: 0, impuesto: 0, total: 0 }
     );
-
     const round2 = (n: number) => Math.round(n * 100) / 100;
-
     return {
       valor_bruto: round2(t.valor_bruto),
       subtotal: round2(t.subtotal),
@@ -122,36 +117,172 @@ export default function SalesByCustomerReportPage() {
     };
   }, [rows]);
 
-  const exportCSV = () => {
+  // ✅ Exportar Excel con formato profesional usando SheetJS
+  const exportExcel = () => {
     if (!rows.length) return;
 
-    const header = ["Periodo", "Identificacion", "Sucursal", "Cliente", "ValorBruto", "Subtotal", "Impuesto", "Total"];
+    const wb = XLSX.utils.book_new();
+    const ws: XLSX.WorkSheet = {};
 
-    const escapeCSV = (v: any) => {
-      const s = String(v ?? "");
-      if (s.includes('"') || s.includes(",") || s.includes("\n")) return `"${s.replace(/"/g, '""')}"`;
-      return s;
+    // — Paleta de colores —
+    const COLOR_HEADER_BG = "1E3A5F";   // azul oscuro
+    const COLOR_HEADER_FG = "FFFFFF";   // blanco
+    const COLOR_TOTAL_BG  = "2D6A4F";   // verde oscuro
+    const COLOR_TOTAL_FG  = "FFFFFF";
+    const COLOR_ALT_BG    = "EBF2FA";   // azul muy claro para filas alternas
+    const COLOR_BORDER    = "B0C4DE";
+
+    // Estilos reutilizables
+    const borderThin = {
+      top:    { style: "thin" as const, color: { rgb: COLOR_BORDER } },
+      bottom: { style: "thin" as const, color: { rgb: COLOR_BORDER } },
+      left:   { style: "thin" as const, color: { rgb: COLOR_BORDER } },
+      right:  { style: "thin" as const, color: { rgb: COLOR_BORDER } },
     };
 
-    const lines = [
-      header.join(","),
-      ...rows.map((r) =>
-        [r.period_label, r.identification, r.sucursal, r.cliente, r.valor_bruto, r.subtotal, r.impuesto, r.total]
-          .map(escapeCSV)
-          .join(",")
-      ),
-      ["TOTAL", "", "", "", totals.valor_bruto, totals.subtotal, totals.impuesto, totals.total].map(escapeCSV).join(","),
+    const headerStyle = {
+      font:      { name: "Arial", bold: true, color: { rgb: COLOR_HEADER_FG }, sz: 11 },
+      fill:      { fgColor: { rgb: COLOR_HEADER_BG }, patternType: "solid" as const },
+      alignment: { horizontal: "center" as const, vertical: "center" as const, wrapText: true },
+      border:    borderThin,
+    };
+
+    const cellStyleLeft = {
+      font:      { name: "Arial", sz: 10 },
+      alignment: { horizontal: "left" as const, vertical: "center" as const },
+      border:    borderThin,
+    };
+
+    const cellStyleRight = {
+      font:      { name: "Arial", sz: 10 },
+      alignment: { horizontal: "right" as const, vertical: "center" as const },
+      border:    borderThin,
+      numFmt:    '$#,##0.00',
+    };
+
+    const cellStyleRightAlt = {
+      ...cellStyleRight,
+      fill: { fgColor: { rgb: COLOR_ALT_BG }, patternType: "solid" as const },
+    };
+
+    const cellStyleLeftAlt = {
+      ...cellStyleLeft,
+      fill: { fgColor: { rgb: COLOR_ALT_BG }, patternType: "solid" as const },
+    };
+
+    const totalStyle = {
+      font:      { name: "Arial", bold: true, color: { rgb: COLOR_TOTAL_FG }, sz: 11 },
+      fill:      { fgColor: { rgb: COLOR_TOTAL_BG }, patternType: "solid" as const },
+      alignment: { horizontal: "right" as const, vertical: "center" as const },
+      border:    borderThin,
+      numFmt:    '$#,##0.00',
+    };
+
+    const totalStyleLeft = {
+      ...totalStyle,
+      alignment: { horizontal: "left" as const, vertical: "center" as const },
+    };
+
+    // — Fila 1: Título del reporte —
+    const granularityLabel: Record<Granularity, string> = {
+      MONTH: "Mensual", QUARTER: "Trimestral",
+      SEMESTER: "Semestral", YEAR: "Anual",
+    };
+
+    ws["A1"] = {
+      v: `REPORTE VENTAS POR CLIENTE — ${granularityLabel[granularity].toUpperCase()} — ${from} a ${to}`,
+      t: "s",
+      s: {
+        font:      { name: "Arial", bold: true, sz: 13, color: { rgb: COLOR_HEADER_BG } },
+        alignment: { horizontal: "left" as const, vertical: "center" as const },
+      },
+    };
+
+    // Fila 2: Subtítulo generado
+    ws["A2"] = {
+      v: `Generado: ${new Date().toLocaleString("es-CO")}`,
+      t: "s",
+      s: {
+        font: { name: "Arial", italic: true, sz: 9, color: { rgb: "888888" } },
+        alignment: { horizontal: "left" as const },
+      },
+    };
+
+    // — Fila 4: Encabezados —
+    const HEADER_ROW = 4;
+    const headers = [
+      "Periodo", "Identificación", "Sucursal", "Cliente",
+      "Valor Bruto ($)", "Subtotal ($)", "Impuesto ($)", "Total ($)",
+    ];
+    const cols = ["A","B","C","D","E","F","G","H"];
+
+    headers.forEach((h, i) => {
+      ws[`${cols[i]}${HEADER_ROW}`] = { v: h, t: "s", s: headerStyle };
+    });
+
+    // — Filas de datos —
+    rows.forEach((r, idx) => {
+      const excelRow = HEADER_ROW + 1 + idx;
+      const isAlt = idx % 2 === 1;
+      const sL = isAlt ? cellStyleLeftAlt  : cellStyleLeft;
+      const sR = isAlt ? cellStyleRightAlt : cellStyleRight;
+
+      ws[`A${excelRow}`] = { v: r.period_label,    t: "s", s: sL };
+      ws[`B${excelRow}`] = { v: r.identification,  t: "s", s: sL };
+      ws[`C${excelRow}`] = { v: r.sucursal,         t: "s", s: sL };
+      ws[`D${excelRow}`] = { v: r.cliente,          t: "s", s: sL };
+      ws[`E${excelRow}`] = { v: r.valor_bruto,      t: "n", s: sR };
+      ws[`F${excelRow}`] = { v: r.subtotal,         t: "n", s: sR };
+      ws[`G${excelRow}`] = { v: r.impuesto,         t: "n", s: sR };
+      ws[`H${excelRow}`] = { v: r.total,            t: "n", s: sR };
+    });
+
+    // — Fila de TOTAL —
+    const totalRow = HEADER_ROW + 1 + rows.length;
+    ws[`A${totalRow}`] = { v: "TOTAL",              t: "s", s: totalStyleLeft };
+    ws[`B${totalRow}`] = { v: "",                   t: "s", s: totalStyleLeft };
+    ws[`C${totalRow}`] = { v: "",                   t: "s", s: totalStyleLeft };
+    ws[`D${totalRow}`] = { v: "",                   t: "s", s: totalStyleLeft };
+    ws[`E${totalRow}`] = { v: totals.valor_bruto,   t: "n", s: totalStyle };
+    ws[`F${totalRow}`] = { v: totals.subtotal,      t: "n", s: totalStyle };
+    ws[`G${totalRow}`] = { v: totals.impuesto,      t: "n", s: totalStyle };
+    ws[`H${totalRow}`] = { v: totals.total,         t: "n", s: totalStyle };
+
+    // — Anchos de columna —
+    ws["!cols"] = [
+      { wch: 18 }, // Periodo
+      { wch: 18 }, // Identificación
+      { wch: 28 }, // Sucursal
+      { wch: 32 }, // Cliente
+      { wch: 18 }, // Valor Bruto
+      { wch: 16 }, // Subtotal
+      { wch: 16 }, // Impuesto
+      { wch: 16 }, // Total
     ];
 
-    const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
+    // — Alto de filas —
+    const rowHeights: XLSX.RowInfo[] = [];
+    rowHeights[0] = { hpt: 28 }; // Título
+    rowHeights[1] = { hpt: 16 }; // Subtítulo
+    rowHeights[HEADER_ROW - 1] = { hpt: 28 }; // Encabezados
+    for (let i = HEADER_ROW; i <= totalRow; i++) {
+      rowHeights[i] = { hpt: 20 };
+    }
+    ws["!rows"] = rowHeights;
 
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `reporte_ventas_cliente_${granularity}_${from}_a_${to}.csv`;
-    a.click();
+    // — Rango de la hoja —
+    ws["!ref"] = `A1:H${totalRow}`;
 
-    URL.revokeObjectURL(url);
+    // — Merge título y subtítulo —
+    ws["!merges"] = [
+      { s: { r: 0, c: 0 }, e: { r: 0, c: 7 } }, // Título
+      { s: { r: 1, c: 0 }, e: { r: 1, c: 7 } }, // Subtítulo
+    ];
+
+    XLSX.utils.book_append_sheet(wb, ws, "Ventas por Cliente");
+
+    const filename = `reporte_ventas_cliente_${granularity}_${from}_a_${to}.xlsx`;
+    XLSX.writeFile(wb, filename);
   };
 
   if (loadingAuth) return <div className="container py-6">Cargando...</div>;
@@ -202,8 +333,9 @@ export default function SalesByCustomerReportPage() {
                   </select>
                 </label>
 
-                <button className="btn" onClick={exportCSV} disabled={!rows.length || loading}>
-                  Exportar CSV
+                {/* ✅ Botón Excel */}
+                <button className="btn" onClick={exportExcel} disabled={!rows.length || loading}>
+                  Exportar Excel
                 </button>
               </div>
 
@@ -267,21 +399,11 @@ export default function SalesByCustomerReportPage() {
 
                       <tr className="border-t-2 border-black bg-white">
                         <Td style={{ fontWeight: 900 }}>TOTAL</Td>
-                        <Td />
-                        <Td />
-                        <Td />
-                        <Td align="right" style={{ fontWeight: 900 }}>
-                          ${totals.valor_bruto.toLocaleString("es-CO")}
-                        </Td>
-                        <Td align="right" style={{ fontWeight: 900 }}>
-                          ${totals.subtotal.toLocaleString("es-CO")}
-                        </Td>
-                        <Td align="right" style={{ fontWeight: 900 }}>
-                          ${totals.impuesto.toLocaleString("es-CO")}
-                        </Td>
-                        <Td align="right" style={{ fontWeight: 900 }}>
-                          ${totals.total.toLocaleString("es-CO")}
-                        </Td>
+                        <Td /><Td /><Td />
+                        <Td align="right" style={{ fontWeight: 900 }}>${totals.valor_bruto.toLocaleString("es-CO")}</Td>
+                        <Td align="right" style={{ fontWeight: 900 }}>${totals.subtotal.toLocaleString("es-CO")}</Td>
+                        <Td align="right" style={{ fontWeight: 900 }}>${totals.impuesto.toLocaleString("es-CO")}</Td>
+                        <Td align="right" style={{ fontWeight: 900 }}>${totals.total.toLocaleString("es-CO")}</Td>
                       </tr>
                     </tbody>
                   </table>
@@ -297,24 +419,13 @@ export default function SalesByCustomerReportPage() {
 
 function Th({ children, align }: { children: any; align?: "left" | "right" | "center" }) {
   return (
-    <th
-      className="border-b border-gray-200 px-3 py-3 text-xs font-semibold text-gray-600"
-      style={{ textAlign: align ?? "left" }}
-    >
+    <th className="border-b border-gray-200 px-3 py-3 text-xs font-semibold text-gray-600" style={{ textAlign: align ?? "left" }}>
       {children}
     </th>
   );
 }
 
-function Td({
-  children,
-  align,
-  style,
-}: {
-  children?: any;
-  align?: "left" | "right" | "center";
-  style?: CSSProperties;
-}) {
+function Td({ children, align, style }: { children?: any; align?: "left" | "right" | "center"; style?: CSSProperties }) {
   return (
     <td className="px-3 py-3 text-sm text-gray-800" style={{ textAlign: align ?? "left", ...style }}>
       {children}

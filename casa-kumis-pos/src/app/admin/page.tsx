@@ -51,9 +51,15 @@ export default function AdminPage() {
       badge: "Análisis",
     },
     {
-      title: "Modificación impuesto",
+      title: "Configuraciones",
       desc: "Cambia el porcentaje el cual toca sumarle por cada venta",
       href: "/admin/settings",
+      badge: "Operación",
+    },
+    {
+      title: "Auditoria de turnos",
+      desc: "Puedes revisar si el cambio de turno si se realizo y consultar Cajeros",
+      href: "/admin/shifts",
       badge: "Operación",
     },
   ];
