@@ -100,19 +100,25 @@ export default function PosPage() {
   const [historySales, setHistorySales] = useState<SaleHistoryRow[]>([]);
   const [historyPaymentsBySale, setHistoryPaymentsBySale] = useState<Record<string, PaymentRow[]>>({});
   const [historyOpeningCash, setHistoryOpeningCash] = useState<number | null>(null);
+
   // ✅ Verificación de entrega de caja
-const [shiftVerification, setShiftVerification] = useState<{
-  verified_at: string;
-  verified_by_name: string;
-  opening_cash: number;
-  sales_total: number;
-  expected_total: number;
-  sales_count: number;
-} | null>(null);
-const [showVerifyForm, setShowVerifyForm] = useState(false);
-const [verifyName, setVerifyName] = useState("");
-const [verifying, setVerifying] = useState(false);
-const [verifyError, setVerifyError] = useState<string | null>(null);
+  const [shiftVerification, setShiftVerification] = useState<{
+    verified_at: string;
+    verified_by_name: string;
+    opening_cash: number;
+    sales_total: number;
+    expected_total: number;
+    sales_count: number;
+  } | null>(null);
+  const [showVerifyForm, setShowVerifyForm] = useState(false);
+  const [verifyName, setVerifyName] = useState("");
+  const [verifying, setVerifying] = useState(false);
+  const [verifyError, setVerifyError] = useState<string | null>(null);
+
+  // ✅ Turno de día anterior sin cerrar
+  const [staleShift, setStaleShift] = useState<{ id: string; opened_at: string } | null>(null);
+  const [closingStale, setClosingStale] = useState(false);
+  const [staleErr, setStaleErr] = useState<string | null>(null);
 
   const loadTaxRate = async () => {
     try {
@@ -260,6 +266,16 @@ const [verifyError, setVerifyError] = useState<string | null>(null);
         .limit(1)
         .maybeSingle();
       if (shiftErr || !shift) return router.replace("/open-shift");
+
+      // ✅ Detectar turno de día anterior sin cerrar
+      const shiftDate = new Date(shift.opened_at).toLocaleDateString("es-CO", { timeZone: "America/Bogota" });
+      const today = new Date().toLocaleDateString("es-CO", { timeZone: "America/Bogota" });
+      if (shiftDate !== today) {
+        setStaleShift({ id: shift.id, opened_at: shift.opened_at });
+        setLoading(false);
+        return;
+      }
+
       setShiftId(shift.id);
       setShiftOpenedAt(shift.opened_at ? String(shift.opened_at) : null);
 
@@ -294,6 +310,40 @@ const [verifyError, setVerifyError] = useState<string | null>(null);
       setLoading(false);
     });
   }, [router]);
+
+  // ✅ Cerrar turno pendiente de día anterior
+  const closeStaleShift = async () => {
+    if (!staleShift) return;
+    setStaleErr(null);
+    setClosingStale(true);
+
+    try {
+      const { data: totalsData } = await supabase
+        .rpc("get_shift_totals", { p_shift_id: staleShift.id });
+      const totals = Array.isArray(totalsData) ? totalsData[0] : totalsData;
+      const expected = Number(totals?.expected_total ?? 0);
+
+      const { error } = await supabase
+        .from("shifts")
+        .update({
+          status: "CLOSED",
+          closed_at: new Date().toISOString(),
+          expected_total: expected,
+          confirmed_total: null,
+          closed_without_confirm: true,
+        })
+        .eq("id", staleShift.id);
+
+      if (error) throw new Error(error.message);
+
+      setStaleShift(null);
+      window.location.reload();
+    } catch (e: any) {
+      setStaleErr(e.message ?? "Error cerrando turno.");
+    } finally {
+      setClosingStale(false);
+    }
+  };
 
   // --- Carrito
   const addToCart = (p: PosProduct) => {
@@ -383,7 +433,7 @@ const [verifyError, setVerifyError] = useState<string | null>(null);
     setTransfer("0");
     setQr("0");
     setSelectedBill(null);
-    setCustomBillValue(""); // ✅ agrégalo aquí // ✅ reset billete
+    setCustomBillValue("");
     setCustomerSearch("");
     setIsCustomerDropdownOpen(false);
     setShowCreateCustomer(false);
@@ -452,15 +502,15 @@ const [verifyError, setVerifyError] = useState<string | null>(null);
           : null,
       }));
       setHistorySales(mappedSales);
-      // ✅ Traer opening_cash del turno
+
       const { data: shiftRow } = await supabase
         .from("shifts")
         .select("opening_cash")
         .eq("id", shiftId)
         .single();
       setHistoryOpeningCash(Number(shiftRow?.opening_cash ?? 0));
-      const saleIds = mappedSales.map((s) => s.id);
 
+      const saleIds = mappedSales.map((s) => s.id);
       if (saleIds.length === 0) { setHistoryPaymentsBySale({}); setHistoryLoading(false); return; }
 
       const { data: payRows, error: payErr } = await supabase
@@ -476,21 +526,22 @@ const [verifyError, setVerifyError] = useState<string | null>(null);
         grouped[sid].push({ method: p.method as PaymentMethod, amount: Number(p.amount ?? 0) });
       });
       setHistoryPaymentsBySale(grouped);
-      // ✅ Cargar verificación existente del turno
-const { data: verif } = await supabase
-  .from("shift_verifications")
-  .select("verified_at, verified_by_name, opening_cash, sales_total, expected_total, sales_count")
-  .eq("shift_id", shiftId)
-  .maybeSingle();
 
-setShiftVerification(verif ? {
-  verified_at: String(verif.verified_at),
-  verified_by_name: String(verif.verified_by_name),
-  opening_cash: Number(verif.opening_cash ?? 0),
-  sales_total: Number(verif.sales_total ?? 0),
-  expected_total: Number(verif.expected_total ?? 0),
-  sales_count: Number(verif.sales_count ?? 0),
-} : null);
+      const { data: verif } = await supabase
+        .from("shift_verifications")
+        .select("verified_at, verified_by_name, opening_cash, sales_total, expected_total, sales_count")
+        .eq("shift_id", shiftId)
+        .maybeSingle();
+
+      setShiftVerification(verif ? {
+        verified_at: String(verif.verified_at),
+        verified_by_name: String(verif.verified_by_name),
+        opening_cash: Number(verif.opening_cash ?? 0),
+        sales_total: Number(verif.sales_total ?? 0),
+        expected_total: Number(verif.expected_total ?? 0),
+        sales_count: Number(verif.sales_count ?? 0),
+      } : null);
+
       setHistoryLoading(false);
     } catch (e: any) {
       setHistoryLoading(false);
@@ -500,37 +551,48 @@ setShiftVerification(verif ? {
 
   const openHistoryModal = async () => { setShowHistory(true); await loadShiftHistory(); };
   const closeHistoryModal = () => setShowHistory(false);
+
   const saveVerification = async () => {
-  if (!shiftId || !branchId) return;
-  const name = verifyName.trim();
-  if (!name) return setVerifyError("Debes ingresar tu nombre.");
+    if (!shiftId || !branchId) return;
+    const name = verifyName.trim();
+    if (!name) return setVerifyError("Debes ingresar tu nombre.");
 
-  setVerifyError(null);
-  setVerifying(true);
+    setVerifyError(null);
+    setVerifying(true);
 
-  try {
-    // Snapshot de los valores actuales
-    const { data, error: rpcErr } = await supabase
-      .rpc("get_shift_totals", { p_shift_id: shiftId });
-    if (rpcErr) throw new Error(rpcErr.message);
-    const row = Array.isArray(data) ? data[0] : data;
+    try {
+      const { data, error: rpcErr } = await supabase
+        .rpc("get_shift_totals", { p_shift_id: shiftId });
+      if (rpcErr) throw new Error(rpcErr.message);
+      const row = Array.isArray(data) ? data[0] : data;
 
-    const { data: sh } = await supabase
-      .from("shifts")
-      .select("opening_cash")
-      .eq("id", shiftId)
-      .single();
+      const { data: sh } = await supabase
+        .from("shifts")
+        .select("opening_cash")
+        .eq("id", shiftId)
+        .single();
 
-    const opening_cash = Number(sh?.opening_cash ?? 0);
-    const sales_total = Number(row?.expected_total ?? 0) - opening_cash;
-    const expected_total = Number(row?.expected_total ?? 0);
-    const sales_count = Number(row?.sales_count ?? 0);
+      const opening_cash = Number(sh?.opening_cash ?? 0);
+      const sales_total = Number(row?.expected_total ?? 0) - opening_cash;
+      const expected_total = Number(row?.expected_total ?? 0);
+      const sales_count = Number(row?.sales_count ?? 0);
 
-    const { error: insErr } = await supabase
-      .from("shift_verifications")
-      .insert({
-        shift_id: shiftId,
-        branch_id: branchId,
+      const { error: insErr } = await supabase
+        .from("shift_verifications")
+        .insert({
+          shift_id: shiftId,
+          branch_id: branchId,
+          verified_by_name: name,
+          opening_cash,
+          sales_total,
+          expected_total,
+          sales_count,
+        });
+
+      if (insErr) throw new Error(insErr.message);
+
+      setShiftVerification({
+        verified_at: new Date().toISOString(),
         verified_by_name: name,
         opening_cash,
         sales_total,
@@ -538,25 +600,15 @@ setShiftVerification(verif ? {
         sales_count,
       });
 
-    if (insErr) throw new Error(insErr.message);
+      setShowVerifyForm(false);
+      setVerifyName("");
+    } catch (e: any) {
+      setVerifyError(e.message ?? "No se pudo guardar la verificación.");
+    } finally {
+      setVerifying(false);
+    }
+  };
 
-    setShiftVerification({
-      verified_at: new Date().toISOString(),
-      verified_by_name: name,
-      opening_cash,
-      sales_total,
-      expected_total,
-      sales_count,
-    });
-
-    setShowVerifyForm(false);
-    setVerifyName("");
-  } catch (e: any) {
-    setVerifyError(e.message ?? "No se pudo guardar la verificación.");
-  } finally {
-    setVerifying(false);
-  }
-};
   const methodLabel = (m: string) => {
     if (m === "CASH") return "EFECTIVO";
     if (m === "CARD") return "TARJETA";
@@ -633,6 +685,8 @@ setShiftVerification(verif ? {
     setSavingSale(false);
     setShowPay(false);
     setCart([]);
+    setSelectedBill(null);
+    setCustomBillValue("");
     setSaleOkMsg(`Venta guardada ✅ (Comprobante: ${String(saleId).slice(0, 8).toUpperCase()})`);
     setPrintingSaleId(saleId);
     sessionStorage.removeItem(`cart_${branchId}`);
@@ -642,6 +696,45 @@ setShiftVerification(verif ? {
 
   if (loading) return <LoadingCard title="Cargando POS..." />;
   if (pageError) return <div className="container py-6 text-red-600">Error: {pageError}</div>;
+
+  // ✅ BLOQUEO — turno de día anterior sin cerrar
+  if (staleShift) return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+      <div className="w-full max-w-md rounded-3xl bg-white shadow-2xl">
+        <div className="card-h">
+          <div className="text-lg font-extrabold text-red-700">⚠️ Turno pendiente de cierre</div>
+          <div className="text-sm text-gray-500 mt-1">No puedes continuar hasta resolver el turno anterior.</div>
+        </div>
+        <div className="card-b space-y-4">
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 p-3 space-y-1">
+            <div className="text-sm font-extrabold text-amber-800">Turno abierto el:</div>
+            <div className="text-sm text-amber-700">
+              {new Date(staleShift.opened_at).toLocaleString("es-CO", {
+                weekday: "long", day: "2-digit", month: "long", year: "numeric",
+                hour: "2-digit", minute: "2-digit",
+              })}
+            </div>
+          </div>
+
+          <div className="text-sm text-gray-600">
+            Este turno <span className="font-extrabold text-gray-900">no fue cerrado</span> al final del día.
+            Al cerrarlo ahora quedará marcado como{" "}
+            <span className="font-extrabold text-amber-700">"cerrado sin confirmar"</span> para que el administrador lo revise.
+          </div>
+
+          {staleErr && <div className="alert-err">{staleErr}</div>}
+
+          <button
+            className="btn btn-primary w-full"
+            onClick={closeStaleShift}
+            disabled={closingStale}
+          >
+            {closingStale ? "Cerrando turno..." : "Cerrar turno pendiente y continuar"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 
   return (
     <div className="mx-auto w-full max-w-[1400px] px-6 py-6 lg:px-10">
@@ -783,151 +876,143 @@ setShiftVerification(verif ? {
                 <div className="card-b flex-1 overflow-auto space-y-3">
                   {historyError && <div className="alert-err">{historyError}</div>}
                   <div className="rounded-2xl border border-gray-200 p-3 bg-white space-y-2">
-  {/* Resumen numérico */}
-  <div className="flex flex-wrap items-center justify-between gap-2">
-    <div className="text-sm">
-      <span className="font-extrabold">Ventas:</span> {historySales.length}
-    </div>
-    <div className="text-sm">
-      <span className="font-extrabold">Total vendido:</span>{" "}
-      ${historySales.reduce((acc, s) => acc + Number(s.total ?? 0), 0).toLocaleString("es-CO")}
-    </div>
-  </div>
+                    {/* Resumen numérico */}
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="text-sm">
+                        <span className="font-extrabold">Ventas:</span> {historySales.length}
+                      </div>
+                      <div className="text-sm">
+                        <span className="font-extrabold">Total vendido:</span>{" "}
+                        ${historySales.reduce((acc, s) => acc + Number(s.total ?? 0), 0).toLocaleString("es-CO")}
+                      </div>
+                    </div>
 
-  {/* ✅ Desglose por método de pago */}
-  {(() => {
-    const metodosMap: Record<string, { label: string; emoji: string; color: string }> = {
-      CASH:     { label: "Efectivo",      emoji: "", color: "text-emerald-700" },
-      CARD:     { label: "Tarjeta",       emoji: "", color: "text-blue-700"    },
-      TRANSFER: { label: "Transferencia", emoji: "", color: "text-violet-700"  },
-      QR:       { label: "QR",            emoji: "", color: "text-orange-700"  },
-    };
+                    {/* ✅ Desglose por método de pago */}
+                    {(() => {
+                      const metodosMap: Record<string, { label: string; emoji: string; color: string }> = {
+                        CASH:     { label: "Efectivo",      emoji: "💵", color: "text-emerald-700" },
+                        CARD:     { label: "Tarjeta",       emoji: "💳", color: "text-blue-700"    },
+                        TRANSFER: { label: "Transferencia", emoji: "🏦", color: "text-violet-700"  },
+                        QR:       { label: "QR",            emoji: "📲", color: "text-orange-700"  },
+                      };
 
-    const totalesPorMetodo = historySales.reduce((acc, s) => {
-      const metodo = String(s.payment_method ?? "CASH").toUpperCase();
-      acc[metodo] = (acc[metodo] ?? 0) + Number(s.total ?? 0);
-      return acc;
-    }, {} as Record<string, number>);
+                      const totalesPorMetodo = Object.values(historyPaymentsBySale).flat().reduce((acc, p) => {
+                        const metodo = String(p.method ?? "CASH").toUpperCase();
+                        acc[metodo] = (acc[metodo] ?? 0) + Number(p.amount ?? 0);
+                        return acc;
+                      }, {} as Record<string, number>);
 
-    const metodosUsados = Object.entries(totalesPorMetodo).filter(([, v]) => v > 0);
-    if (metodosUsados.length === 0) return null;
+                      const metodosUsados = Object.entries(totalesPorMetodo).filter(([, v]) => v > 0);
+                      if (metodosUsados.length === 0) return null;
 
-    return (
-      <div className="flex flex-wrap gap-2 border-t border-gray-100 pt-2">
-        {metodosUsados.map(([metodo, monto]) => {
-          const info = metodosMap[metodo] ?? { label: metodo, emoji: "💰", color: "text-gray-700" };
-          return (
-            <div key={metodo} className="flex items-center gap-1 rounded-2xl border border-gray-200 bg-gray-50 px-3 py-1">
-              <span className="text-sm">{info.emoji}</span>
-              <span className={`text-xs font-bold ${info.color}`}>{info.label}:</span>
-              <span className={`text-xs font-extrabold ${info.color}`}>
-                ${monto.toLocaleString("es-CO")}
-              </span>
-            </div>
-          );
-        })}
-      </div>
-    );
-  })()}
+                      return (
+                        <div className="flex flex-wrap gap-2 border-t border-gray-100 pt-2">
+                          {metodosUsados.map(([metodo, monto]) => {
+                            const info = metodosMap[metodo] ?? { label: metodo, emoji: "💰", color: "text-gray-700" };
+                            return (
+                              <div key={metodo} className="flex items-center gap-1 rounded-2xl border border-gray-200 bg-gray-50 px-3 py-1">
+                                <span className="text-sm">{info.emoji}</span>
+                                <span className={`text-xs font-bold ${info.color}`}>{info.label}:</span>
+                                <span className={`text-xs font-extrabold ${info.color}`}>
+                                  ${monto.toLocaleString("es-CO")}
+                                </span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      );
+                    })()}
 
-  {historyOpeningCash !== null && (
-    <div className="flex items-center justify-between border-t border-gray-100 pt-2">
-      <span className="text-sm text-gray-500">Base al abrir turno</span>
-      <span className="text-sm font-extrabold text-gray-800">
-        ${historyOpeningCash.toLocaleString("es-CO")}
-      </span>
-    </div>
-  )}
+                    {historyOpeningCash !== null && (
+                      <div className="flex items-center justify-between border-t border-gray-100 pt-2">
+                        <span className="text-sm text-gray-500">Base al abrir turno</span>
+                        <span className="text-sm font-extrabold text-gray-800">
+                          ${historyOpeningCash.toLocaleString("es-CO")}
+                        </span>
+                      </div>
+                    )}
 
-  {/* ✅ Verificación de entrega */}
-  <div className="border-t border-gray-100 pt-2">
-    {shiftVerification ? (
-      // Ya fue verificado — mostrar constancia
-      <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-3 space-y-1">
-        <div className="flex items-center gap-2">
-          <span className="text-emerald-700 font-extrabold text-sm">✓ Entrega verificada</span>
-        </div>
-        <div className="text-xs text-emerald-700">
-          <span className="font-bold">Cajero:</span> {shiftVerification.verified_by_name}
-        </div>
-        <div className="text-xs text-emerald-700">
-          <span className="font-bold">Hora:</span>{" "}
-          {new Date(shiftVerification.verified_at).toLocaleString("es-CO")}
-        </div>
-        <div className="text-xs text-emerald-700">
-          <span className="font-bold">Base:</span> ${shiftVerification.opening_cash.toLocaleString("es-CO")}
-          {"  •  "}
-          <span className="font-bold">Ventas:</span> ${shiftVerification.sales_total.toLocaleString("es-CO")}
-          {"  •  "}
-          <span className="font-bold">Total:</span> ${shiftVerification.expected_total.toLocaleString("es-CO")}
-        </div>
-        <div className="text-xs text-emerald-600 opacity-75">
-          El cajero confirmó que los valores eran correctos al momento de la verificación.
-        </div>
-      </div>
-    ) : showVerifyForm ? (
-      // Formulario de verificación
-      <div className="rounded-2xl border border-gray-200 p-3 space-y-3">
-        <div className="text-sm font-extrabold">Verificar entrega de caja</div>
-        <div className="text-xs text-gray-500">
-          Al verificar confirmas que los valores actuales (base + ventas) son correctos
-          y aceptas responsabilidad desde este momento.
-        </div>
-
-        <label className="grid gap-1">
-          <span className="label">Tu nombre</span>
-          <input
-            className="input"
-            value={verifyName}
-            onChange={(e) => setVerifyName(e.target.value)}
-            placeholder="Ej: Juan Pérez"
-            disabled={verifying}
-          />
-        </label>
-
-        {/* Snapshot de valores actuales */}
-        <div className="rounded-2xl border border-gray-200 bg-gray-50 p-3 space-y-1">
-          <div className="text-xs font-extrabold text-gray-600 mb-1">Valores al momento de verificar:</div>
-          <div className="flex justify-between text-xs">
-            <span className="text-gray-500">Base de caja</span>
-            <span className="font-bold">${(historyOpeningCash ?? 0).toLocaleString("es-CO")}</span>
-          </div>
-          <div className="flex justify-between text-xs">
-            <span className="text-gray-500">Total ventas</span>
-            <span className="font-bold">
-              ${historySales.reduce((acc, s) => acc + Number(s.total ?? 0), 0).toLocaleString("es-CO")}
-            </span>
-          </div>
-          <div className="flex justify-between text-xs border-t border-gray-200 pt-1 mt-1">
-            <span className="text-gray-700 font-bold">Total esperado en caja</span>
-            <span className="font-extrabold">
-              ${((historyOpeningCash ?? 0) + historySales.reduce((acc, s) => acc + Number(s.total ?? 0), 0)).toLocaleString("es-CO")}
-            </span>
-          </div>
-        </div>
-
-        {verifyError && <div className="alert-err">{verifyError}</div>}
-
-        <div className="flex gap-2">
-          <button className="btn flex-1" onClick={() => { setShowVerifyForm(false); setVerifyName(""); setVerifyError(null); }} disabled={verifying}>
-            Cancelar
-          </button>
-          <button className="btn btn-primary flex-1" onClick={saveVerification} disabled={verifying}>
-            {verifying ? "Guardando..." : "Confirmar verificación"}
-          </button>
-        </div>
-      </div>
-    ) : (
-      // Botón para iniciar verificación
-      <button
-        className="btn w-full"
-        onClick={() => { setShowVerifyForm(true); setVerifyError(null); }}
-      >
-        Verificar entrega de caja
-      </button>
-    )}
-  </div>
-</div>
+                    {/* ✅ Verificación de entrega */}
+                    <div className="border-t border-gray-100 pt-2">
+                      {shiftVerification ? (
+                        <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-3 space-y-1">
+                          <div className="flex items-center gap-2">
+                            <span className="text-emerald-700 font-extrabold text-sm">✓ Entrega verificada</span>
+                          </div>
+                          <div className="text-xs text-emerald-700">
+                            <span className="font-bold">Cajero:</span> {shiftVerification.verified_by_name}
+                          </div>
+                          <div className="text-xs text-emerald-700">
+                            <span className="font-bold">Hora:</span>{" "}
+                            {new Date(shiftVerification.verified_at).toLocaleString("es-CO")}
+                          </div>
+                          <div className="text-xs text-emerald-700">
+                            <span className="font-bold">Base:</span> ${shiftVerification.opening_cash.toLocaleString("es-CO")}
+                            {"  •  "}
+                            <span className="font-bold">Ventas:</span> ${shiftVerification.sales_total.toLocaleString("es-CO")}
+                            {"  •  "}
+                            <span className="font-bold">Total:</span> ${shiftVerification.expected_total.toLocaleString("es-CO")}
+                          </div>
+                          <div className="text-xs text-emerald-600 opacity-75">
+                            El cajero confirmó que los valores eran correctos al momento de la verificación.
+                          </div>
+                        </div>
+                      ) : showVerifyForm ? (
+                        <div className="rounded-2xl border border-gray-200 p-3 space-y-3">
+                          <div className="text-sm font-extrabold">Verificar entrega de caja</div>
+                          <div className="text-xs text-gray-500">
+                            Al verificar confirmas que los valores actuales (base + ventas) son correctos
+                            y aceptas responsabilidad desde este momento.
+                          </div>
+                          <label className="grid gap-1">
+                            <span className="label">Tu nombre</span>
+                            <input
+                              className="input"
+                              value={verifyName}
+                              onChange={(e) => setVerifyName(e.target.value)}
+                              placeholder="Ej: Juan Pérez"
+                              disabled={verifying}
+                            />
+                          </label>
+                          <div className="rounded-2xl border border-gray-200 bg-gray-50 p-3 space-y-1">
+                            <div className="text-xs font-extrabold text-gray-600 mb-1">Valores al momento de verificar:</div>
+                            <div className="flex justify-between text-xs">
+                              <span className="text-gray-500">Base de caja</span>
+                              <span className="font-bold">${(historyOpeningCash ?? 0).toLocaleString("es-CO")}</span>
+                            </div>
+                            <div className="flex justify-between text-xs">
+                              <span className="text-gray-500">Total ventas</span>
+                              <span className="font-bold">
+                                ${historySales.reduce((acc, s) => acc + Number(s.total ?? 0), 0).toLocaleString("es-CO")}
+                              </span>
+                            </div>
+                            <div className="flex justify-between text-xs border-t border-gray-200 pt-1 mt-1">
+                              <span className="text-gray-700 font-bold">Total esperado en caja</span>
+                              <span className="font-extrabold">
+                                ${((historyOpeningCash ?? 0) + historySales.reduce((acc, s) => acc + Number(s.total ?? 0), 0)).toLocaleString("es-CO")}
+                              </span>
+                            </div>
+                          </div>
+                          {verifyError && <div className="alert-err">{verifyError}</div>}
+                          <div className="flex gap-2">
+                            <button className="btn flex-1" onClick={() => { setShowVerifyForm(false); setVerifyName(""); setVerifyError(null); }} disabled={verifying}>
+                              Cancelar
+                            </button>
+                            <button className="btn btn-primary flex-1" onClick={saveVerification} disabled={verifying}>
+                              {verifying ? "Guardando..." : "Confirmar verificación"}
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <button
+                          className="btn w-full"
+                          onClick={() => { setShowVerifyForm(true); setVerifyError(null); }}
+                        >
+                          Verificar entrega de caja
+                        </button>
+                      )}
+                    </div>
+                  </div>
 
                   {historyLoading ? (
                     <div className="text-sm text-gray-500">Cargando historial…</div>
@@ -1068,133 +1153,120 @@ setShiftVerification(verif ? {
                   </div>
 
                   {/* ✅ CALCULADORA DE CAMBIO */}
-<div className="rounded-2xl border border-gray-200 p-3">
-  <div className="mb-2 text-sm font-extrabold">Calculadora de cambio</div>
-  <div className="text-xs text-gray-500 mb-3">
-    Selecciona un billete o escribe el monto recibido.
-  </div>
+                  <div className="rounded-2xl border border-gray-200 p-3">
+                    <div className="mb-2 text-sm font-extrabold">Calculadora de cambio</div>
+                    <div className="text-xs text-gray-500 mb-3">
+                      Selecciona un billete o escribe el monto recibido.
+                    </div>
 
-  {/* Botones de billetes */}
-  <div className="flex gap-2 mb-3">
-    {BILLS.map((bill) => (
-      <button
-        key={bill}
-        type="button"
-        disabled={savingSale || bill < total}
-        onClick={() => {
-          setSelectedBill(selectedBill === bill ? null : bill);
-          setCustomBillValue("");
-        }}
-        className={`flex-1 rounded-2xl border px-3 py-2 text-sm font-extrabold transition
-          ${selectedBill === bill
-            ? "border-emerald-500 bg-emerald-50 text-emerald-700"
-            : bill < total
-              ? "border-gray-200 bg-gray-50 text-gray-300 cursor-not-allowed"
-              : "border-gray-200 bg-white text-gray-700 hover:border-gray-400"
-          }`}
-      >
-        ${bill.toLocaleString("es-CO")}
-      </button>
-    ))}
-  </div>
+                    <div className="flex gap-2 mb-3">
+                      {BILLS.map((bill) => (
+                        <button
+                          key={bill}
+                          type="button"
+                          disabled={savingSale || bill < total}
+                          onClick={() => {
+                            setSelectedBill(selectedBill === bill ? null : bill);
+                            setCustomBillValue("");
+                          }}
+                          className={`flex-1 rounded-2xl border px-3 py-2 text-sm font-extrabold transition
+                            ${selectedBill === bill
+                              ? "border-emerald-500 bg-emerald-50 text-emerald-700"
+                              : bill < total
+                                ? "border-gray-200 bg-gray-50 text-gray-300 cursor-not-allowed"
+                                : "border-gray-200 bg-white text-gray-700 hover:border-gray-400"
+                            }`}
+                        >
+                          ${bill.toLocaleString("es-CO")}
+                        </button>
+                      ))}
+                    </div>
 
-  <div className="flex gap-2 items-center">
-  <input
-    type="text"
-    inputMode="numeric"
-    className="input flex-1"
-    placeholder="Otro valor recibido..."
-    value={customBillValue}
-    onChange={(e) => {
-      const raw = e.target.value.replace(/\./g, "").replace(/\D/g, "");
-      if (raw === "") {
-        setCustomBillValue("");
-        setSelectedBill(null);
-        return;
-      }
-      const formatted = Number(raw).toLocaleString("es-CO");
-      setCustomBillValue(formatted);
-      setSelectedBill(null);
-    }}
-    disabled={savingSale}
-  />
-  {customBillValue && (
-    <button
-      type="button"
-      className="btn"
-      onClick={() => setCustomBillValue("")}
-      disabled={savingSale}
-    >
-      ✕
-    </button>
-  )}
-</div>
+                    <div className="flex gap-2 items-center">
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        className="input flex-1"
+                        placeholder="Otro valor recibido..."
+                        value={customBillValue}
+                        onChange={(e) => {
+                          const raw = e.target.value.replace(/\./g, "").replace(/\D/g, "");
+                          if (raw === "") {
+                            setCustomBillValue("");
+                            setSelectedBill(null);
+                            return;
+                          }
+                          const formatted = Number(raw).toLocaleString("es-CO");
+                          setCustomBillValue(formatted);
+                          setSelectedBill(null);
+                        }}
+                        disabled={savingSale}
+                      />
+                      {customBillValue && (
+                        <button
+                          type="button"
+                          className="btn"
+                          onClick={() => setCustomBillValue("")}
+                          disabled={savingSale}
+                        >
+                          ✕
+                        </button>
+                      )}
+                    </div>
 
-  {/* Resultado cambio — billete predefinido */}
-  {selectedBill !== null && billChange !== null && (
-    <div className="mt-3 rounded-2xl border border-emerald-200 bg-emerald-50 p-3">
-      <div className="flex items-center justify-between">
-        <span className="text-sm text-emerald-700">Billete</span>
-        <span className="text-sm font-extrabold text-emerald-800">
-          ${selectedBill.toLocaleString("es-CO")}
-        </span>
-      </div>
-      <div className="mt-1 flex items-center justify-between">
-        <span className="text-sm text-emerald-700">Total venta</span>
-        <span className="text-sm font-extrabold text-emerald-800">
-          ${total.toLocaleString("es-CO")}
-        </span>
-      </div>
-      <div className="mt-2 flex items-center justify-between border-t border-emerald-200 pt-2">
-        <span className="text-base font-extrabold text-emerald-700">Cambio</span>
-        <span className="text-xl font-black text-emerald-700">
-          ${billChange.toLocaleString("es-CO")}
-        </span>
-      </div>
-    </div>
-  )}
+                    {selectedBill !== null && billChange !== null && (
+                      <div className="mt-3 rounded-2xl border border-emerald-200 bg-emerald-50 p-3">
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm text-emerald-700">Billete</span>
+                          <span className="text-sm font-extrabold text-emerald-800">
+                            ${selectedBill.toLocaleString("es-CO")}
+                          </span>
+                        </div>
+                        <div className="mt-1 flex items-center justify-between">
+                          <span className="text-sm text-emerald-700">Total venta</span>
+                          <span className="text-sm font-extrabold text-emerald-800">
+                            ${total.toLocaleString("es-CO")}
+                          </span>
+                        </div>
+                        <div className="mt-2 flex items-center justify-between border-t border-emerald-200 pt-2">
+                          <span className="text-base font-extrabold text-emerald-700">Cambio</span>
+                          <span className="text-xl font-black text-emerald-700">
+                            ${billChange.toLocaleString("es-CO")}
+                          </span>
+                        </div>
+                      </div>
+                    )}
 
-  {/* Resultado cambio — valor personalizado */}
-  {(() => {
-    const custom = toNum(customBillValue);
-    if (!customBillValue || custom <= 0) return null;
-    const change = Math.round((custom - total) * 100) / 100;
-    return (
-      <div className={`mt-3 rounded-2xl border p-3 ${
-        change < 0
-          ? "border-red-200 bg-red-50"
-          : "border-emerald-200 bg-emerald-50"
-      }`}>
-        <div className="flex items-center justify-between">
-          <span className={`text-sm ${change < 0 ? "text-red-700" : "text-emerald-700"}`}>
-            Valor recibido
-          </span>
-          <span className={`text-sm font-extrabold ${change < 0 ? "text-red-800" : "text-emerald-800"}`}>
-            ${custom.toLocaleString("es-CO")}
-          </span>
-        </div>
-        <div className="mt-1 flex items-center justify-between">
-          <span className={`text-sm ${change < 0 ? "text-red-700" : "text-emerald-700"}`}>
-            Total venta
-          </span>
-          <span className={`text-sm font-extrabold ${change < 0 ? "text-red-800" : "text-emerald-800"}`}>
-            ${total.toLocaleString("es-CO")}
-          </span>
-        </div>
-        <div className={`mt-2 flex items-center justify-between border-t pt-2 ${
-          change < 0 ? "border-red-200" : "border-emerald-200"
-        }`}>
-          <span className={`text-base font-extrabold ${change < 0 ? "text-red-700" : "text-emerald-700"}`}>
-            {change < 0 ? "Falta" : "Cambio"}
-          </span>
-          <span className={`text-xl font-black ${change < 0 ? "text-red-700" : "text-emerald-700"}`}>
-            ${Math.abs(change).toLocaleString("es-CO")}
-          </span>
-        </div>
-      </div>
-    );
-  })()}
-</div>
+                    {(() => {
+                      const custom = toNum(customBillValue);
+                      if (!customBillValue || custom <= 0) return null;
+                      const change = Math.round((custom - total) * 100) / 100;
+                      return (
+                        <div className={`mt-3 rounded-2xl border p-3 ${change < 0 ? "border-red-200 bg-red-50" : "border-emerald-200 bg-emerald-50"}`}>
+                          <div className="flex items-center justify-between">
+                            <span className={`text-sm ${change < 0 ? "text-red-700" : "text-emerald-700"}`}>Valor recibido</span>
+                            <span className={`text-sm font-extrabold ${change < 0 ? "text-red-800" : "text-emerald-800"}`}>
+                              ${custom.toLocaleString("es-CO")}
+                            </span>
+                          </div>
+                          <div className="mt-1 flex items-center justify-between">
+                            <span className={`text-sm ${change < 0 ? "text-red-700" : "text-emerald-700"}`}>Total venta</span>
+                            <span className={`text-sm font-extrabold ${change < 0 ? "text-red-800" : "text-emerald-800"}`}>
+                              ${total.toLocaleString("es-CO")}
+                            </span>
+                          </div>
+                          <div className={`mt-2 flex items-center justify-between border-t pt-2 ${change < 0 ? "border-red-200" : "border-emerald-200"}`}>
+                            <span className={`text-base font-extrabold ${change < 0 ? "text-red-700" : "text-emerald-700"}`}>
+                              {change < 0 ? "Falta" : "Cambio"}
+                            </span>
+                            <span className={`text-xl font-black ${change < 0 ? "text-red-700" : "text-emerald-700"}`}>
+                              ${Math.abs(change).toLocaleString("es-CO")}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </div>
 
                   {/* Métodos de pago */}
                   <PayInput label="Efectivo" value={cash} setValue={setCash} disabled={savingSale} />
