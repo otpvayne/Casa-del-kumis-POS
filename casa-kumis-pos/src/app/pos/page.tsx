@@ -79,6 +79,7 @@ export default function PosPage() {
 
   // ✅ Billete seleccionado para calculadora de cambio
   const [selectedBill, setSelectedBill] = useState<number | null>(null);
+  const [customBillValue, setCustomBillValue] = useState<string>("");
 
   // Clientes
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -381,7 +382,8 @@ const [verifyError, setVerifyError] = useState<string | null>(null);
     setCard("0");
     setTransfer("0");
     setQr("0");
-    setSelectedBill(null); // ✅ reset billete
+    setSelectedBill(null);
+    setCustomBillValue(""); // ✅ agrégalo aquí // ✅ reset billete
     setCustomerSearch("");
     setIsCustomerDropdownOpen(false);
     setShowCreateCustomer(false);
@@ -792,6 +794,42 @@ setShiftVerification(verif ? {
     </div>
   </div>
 
+  {/* ✅ Desglose por método de pago */}
+  {(() => {
+    const metodosMap: Record<string, { label: string; emoji: string; color: string }> = {
+      CASH:     { label: "Efectivo",      emoji: "", color: "text-emerald-700" },
+      CARD:     { label: "Tarjeta",       emoji: "", color: "text-blue-700"    },
+      TRANSFER: { label: "Transferencia", emoji: "", color: "text-violet-700"  },
+      QR:       { label: "QR",            emoji: "", color: "text-orange-700"  },
+    };
+
+    const totalesPorMetodo = historySales.reduce((acc, s) => {
+      const metodo = String(s.payment_method ?? "CASH").toUpperCase();
+      acc[metodo] = (acc[metodo] ?? 0) + Number(s.total ?? 0);
+      return acc;
+    }, {} as Record<string, number>);
+
+    const metodosUsados = Object.entries(totalesPorMetodo).filter(([, v]) => v > 0);
+    if (metodosUsados.length === 0) return null;
+
+    return (
+      <div className="flex flex-wrap gap-2 border-t border-gray-100 pt-2">
+        {metodosUsados.map(([metodo, monto]) => {
+          const info = metodosMap[metodo] ?? { label: metodo, emoji: "💰", color: "text-gray-700" };
+          return (
+            <div key={metodo} className="flex items-center gap-1 rounded-2xl border border-gray-200 bg-gray-50 px-3 py-1">
+              <span className="text-sm">{info.emoji}</span>
+              <span className={`text-xs font-bold ${info.color}`}>{info.label}:</span>
+              <span className={`text-xs font-extrabold ${info.color}`}>
+                ${monto.toLocaleString("es-CO")}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    );
+  })()}
+
   {historyOpeningCash !== null && (
     <div className="flex items-center justify-between border-t border-gray-100 pt-2">
       <span className="text-sm text-gray-500">Base al abrir turno</span>
@@ -1029,58 +1067,134 @@ setShiftVerification(verif ? {
                     </div>
                   </div>
 
-                  {/* ✅ CALCULADORA DE CAMBIO — solo aparece si pago es 100% efectivo o campo efectivo > 0 */}
-                  <div className="rounded-2xl border border-gray-200 p-3">
-                    <div className="mb-2 text-sm font-extrabold">Calculadora de cambio</div>
-                    <div className="text-xs text-gray-500 mb-3">
-                      Selecciona el billete con que paga el cliente.
-                    </div>
+                  {/* ✅ CALCULADORA DE CAMBIO */}
+<div className="rounded-2xl border border-gray-200 p-3">
+  <div className="mb-2 text-sm font-extrabold">Calculadora de cambio</div>
+  <div className="text-xs text-gray-500 mb-3">
+    Selecciona un billete o escribe el monto recibido.
+  </div>
 
-                    {/* Botones de billetes */}
-                    <div className="flex gap-2">
-                      {BILLS.map((bill) => (
-                        <button
-                          key={bill}
-                          type="button"
-                          disabled={savingSale || bill < total}
-                          onClick={() => setSelectedBill(selectedBill === bill ? null : bill)}
-                          className={`flex-1 rounded-2xl border px-3 py-2 text-sm font-extrabold transition
-                            ${selectedBill === bill
-                              ? "border-emerald-500 bg-emerald-50 text-emerald-700"
-                              : bill < total
-                                ? "border-gray-200 bg-gray-50 text-gray-300 cursor-not-allowed"
-                                : "border-gray-200 bg-white text-gray-700 hover:border-gray-400"
-                            }`}
-                        >
-                          ${bill.toLocaleString("es-CO")}
-                        </button>
-                      ))}
-                    </div>
+  {/* Botones de billetes */}
+  <div className="flex gap-2 mb-3">
+    {BILLS.map((bill) => (
+      <button
+        key={bill}
+        type="button"
+        disabled={savingSale || bill < total}
+        onClick={() => {
+          setSelectedBill(selectedBill === bill ? null : bill);
+          setCustomBillValue("");
+        }}
+        className={`flex-1 rounded-2xl border px-3 py-2 text-sm font-extrabold transition
+          ${selectedBill === bill
+            ? "border-emerald-500 bg-emerald-50 text-emerald-700"
+            : bill < total
+              ? "border-gray-200 bg-gray-50 text-gray-300 cursor-not-allowed"
+              : "border-gray-200 bg-white text-gray-700 hover:border-gray-400"
+          }`}
+      >
+        ${bill.toLocaleString("es-CO")}
+      </button>
+    ))}
+  </div>
 
-                    {/* Resultado cambio */}
-                    {selectedBill !== null && billChange !== null && (
-                      <div className="mt-3 rounded-2xl border border-emerald-200 bg-emerald-50 p-3">
-                        <div className="flex items-center justify-between">
-                          <span className="text-sm text-emerald-700">Billete</span>
-                          <span className="text-sm font-extrabold text-emerald-800">
-                            ${selectedBill.toLocaleString("es-CO")}
-                          </span>
-                        </div>
-                        <div className="mt-1 flex items-center justify-between">
-                          <span className="text-sm text-emerald-700">Total venta</span>
-                          <span className="text-sm font-extrabold text-emerald-800">
-                            ${total.toLocaleString("es-CO")}
-                          </span>
-                        </div>
-                        <div className="mt-2 flex items-center justify-between border-t border-emerald-200 pt-2">
-                          <span className="text-base font-extrabold text-emerald-700">Cambio</span>
-                          <span className="text-xl font-black text-emerald-700">
-                            ${billChange.toLocaleString("es-CO")}
-                          </span>
-                        </div>
-                      </div>
-                    )}
-                  </div>
+  <div className="flex gap-2 items-center">
+  <input
+    type="text"
+    inputMode="numeric"
+    className="input flex-1"
+    placeholder="Otro valor recibido..."
+    value={customBillValue}
+    onChange={(e) => {
+      const raw = e.target.value.replace(/\./g, "").replace(/\D/g, "");
+      if (raw === "") {
+        setCustomBillValue("");
+        setSelectedBill(null);
+        return;
+      }
+      const formatted = Number(raw).toLocaleString("es-CO");
+      setCustomBillValue(formatted);
+      setSelectedBill(null);
+    }}
+    disabled={savingSale}
+  />
+  {customBillValue && (
+    <button
+      type="button"
+      className="btn"
+      onClick={() => setCustomBillValue("")}
+      disabled={savingSale}
+    >
+      ✕
+    </button>
+  )}
+</div>
+
+  {/* Resultado cambio — billete predefinido */}
+  {selectedBill !== null && billChange !== null && (
+    <div className="mt-3 rounded-2xl border border-emerald-200 bg-emerald-50 p-3">
+      <div className="flex items-center justify-between">
+        <span className="text-sm text-emerald-700">Billete</span>
+        <span className="text-sm font-extrabold text-emerald-800">
+          ${selectedBill.toLocaleString("es-CO")}
+        </span>
+      </div>
+      <div className="mt-1 flex items-center justify-between">
+        <span className="text-sm text-emerald-700">Total venta</span>
+        <span className="text-sm font-extrabold text-emerald-800">
+          ${total.toLocaleString("es-CO")}
+        </span>
+      </div>
+      <div className="mt-2 flex items-center justify-between border-t border-emerald-200 pt-2">
+        <span className="text-base font-extrabold text-emerald-700">Cambio</span>
+        <span className="text-xl font-black text-emerald-700">
+          ${billChange.toLocaleString("es-CO")}
+        </span>
+      </div>
+    </div>
+  )}
+
+  {/* Resultado cambio — valor personalizado */}
+  {(() => {
+    const custom = toNum(customBillValue);
+    if (!customBillValue || custom <= 0) return null;
+    const change = Math.round((custom - total) * 100) / 100;
+    return (
+      <div className={`mt-3 rounded-2xl border p-3 ${
+        change < 0
+          ? "border-red-200 bg-red-50"
+          : "border-emerald-200 bg-emerald-50"
+      }`}>
+        <div className="flex items-center justify-between">
+          <span className={`text-sm ${change < 0 ? "text-red-700" : "text-emerald-700"}`}>
+            Valor recibido
+          </span>
+          <span className={`text-sm font-extrabold ${change < 0 ? "text-red-800" : "text-emerald-800"}`}>
+            ${custom.toLocaleString("es-CO")}
+          </span>
+        </div>
+        <div className="mt-1 flex items-center justify-between">
+          <span className={`text-sm ${change < 0 ? "text-red-700" : "text-emerald-700"}`}>
+            Total venta
+          </span>
+          <span className={`text-sm font-extrabold ${change < 0 ? "text-red-800" : "text-emerald-800"}`}>
+            ${total.toLocaleString("es-CO")}
+          </span>
+        </div>
+        <div className={`mt-2 flex items-center justify-between border-t pt-2 ${
+          change < 0 ? "border-red-200" : "border-emerald-200"
+        }`}>
+          <span className={`text-base font-extrabold ${change < 0 ? "text-red-700" : "text-emerald-700"}`}>
+            {change < 0 ? "Falta" : "Cambio"}
+          </span>
+          <span className={`text-xl font-black ${change < 0 ? "text-red-700" : "text-emerald-700"}`}>
+            ${Math.abs(change).toLocaleString("es-CO")}
+          </span>
+        </div>
+      </div>
+    );
+  })()}
+</div>
 
                   {/* Métodos de pago */}
                   <PayInput label="Efectivo" value={cash} setValue={setCash} disabled={savingSale} />
