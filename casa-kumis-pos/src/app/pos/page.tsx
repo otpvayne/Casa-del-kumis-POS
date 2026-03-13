@@ -406,12 +406,8 @@ export default function PosPage() {
   // --- Cobro helpers
   const toNum = (v: string) => {
     if (!v) return 0;
-    if (v.includes(",")) {
-      const cleaned = v.replace(/\./g, "").replace(",", ".");
-      const n = Number(cleaned);
-      return Number.isNaN(n) ? 0 : n;
-    }
-    const n = Number(v);
+    const cleaned = v.replace(/\./g, "").replace(",", ".");
+    const n = Number(cleaned);
     return Number.isNaN(n) ? 0 : n;
   };
 
