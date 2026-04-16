@@ -62,6 +62,12 @@ export default function AdminPage() {
       href: "/admin/shifts",
       badge: "Operación",
     },
+    {
+  title: "Inventario",
+  desc: "Stock por sucursal, movimientos, entradas, retiros y reporte vendido vs físico.",
+  href: "/admin/inventario",
+  badge: "Inventario",
+},
   ];
 
   return (
