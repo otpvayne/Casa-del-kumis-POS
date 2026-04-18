@@ -254,7 +254,29 @@ export default function PosPage() {
 
   useEffect(() => { if (!branchId) return; sessionStorage.setItem(`cart_${branchId}`, JSON.stringify(cart)); }, [cart, branchId]);
 
-  const toNum = (v: string) => { if (!v) return 0; const cleaned = v.replace(/\./g, "").replace(",", "."); const n = Number(cleaned); return Number.isNaN(n) ? 0 : n; };
+  const toNum = (v: string) => {
+  if (!v) return 0;
+
+  const raw = String(v).trim();
+
+  // Caso 1: formato colombiano/español -> 15.999,99
+  if (raw.includes(",") && raw.includes(".")) {
+    const normalized = raw.replace(/\./g, "").replace(",", ".");
+    const n = Number(normalized);
+    return Number.isNaN(n) ? 0 : n;
+  }
+
+  // Caso 2: decimal normal -> 15999.99
+  if (raw.includes(".")) {
+    const n = Number(raw);
+    return Number.isNaN(n) ? 0 : n;
+  }
+
+  // Caso 3: entero o coma decimal -> 15999 / 15999,99
+  const normalized = raw.replace(",", ".");
+  const n = Number(normalized);
+  return Number.isNaN(n) ? 0 : n;
+};
   const paymentsSum = useMemo(() => Math.round((toNum(cash) + toNum(card) + toNum(transfer) + toNum(qr)) * 100) / 100, [cash, card, transfer, qr]);
   const billChange = useMemo(() => { if (!selectedBill) return null; return Math.round((selectedBill - total) * 100) / 100; }, [selectedBill, total]);
 
@@ -588,58 +610,293 @@ export default function PosPage() {
           {/* MODAL PAGO */}
           {showPay && (
             <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40">
-              <div className="card w-full max-w-md max-h-[85vh] flex flex-col">
+              <div className="card w-full max-w-3xl max-h-[90vh] flex flex-col">
+
+                {/* Header */}
                 <div className="card-h flex items-center justify-between">
-                  <div><div className="text-lg font-extrabold">Cobrar</div><div className="text-sm text-gray-500">Total a pagar: <span className="font-bold">${total.toLocaleString("es-CO")}</span></div></div>
+                  <div>
+                    <div className="text-lg font-extrabold">Cobrar</div>
+                    <div className="text-sm text-gray-500">Total a pagar: <span className="font-bold">${total.toLocaleString("es-CO")}</span></div>
+                  </div>
                   <button className="btn" onClick={closePayModal} disabled={savingSale}>✕</button>
                 </div>
-                <div className="card-b space-y-3 flex-1 overflow-auto">
-                  <div className="rounded-2xl border border-gray-200 p-3">
-                    <div className="flex items-center justify-between"><div className="text-sm font-extrabold">Cliente</div><span className="badge">{selectedCustomer ? selectedCustomer.name : "CONSUMIDOR FINAL"}</span></div>
-                    <div className="mt-3 relative">
-                      <button type="button" className="btn w-full justify-between" onClick={() => setIsCustomerDropdownOpen((v) => !v)} disabled={savingSale}><span className="truncate">{selectedCustomer ? `${selectedCustomer.name} (${selectedCustomer.identification})` : "Seleccionar cliente…"}</span><span className="ml-2 text-gray-500">▾</span></button>
-                      {isCustomerDropdownOpen && (
-                        <div className="absolute z-50 mt-2 w-full rounded-2xl border border-gray-200 bg-white shadow-lg overflow-hidden">
-                          <div className="p-3 border-b border-gray-200"><label className="grid gap-1"><span className="label">Buscar</span><input className="input" value={customerSearch} onChange={(e) => setCustomerSearch(e.target.value)} placeholder="Nombre, identificación…" disabled={savingSale} /></label></div>
-                          <div className="max-h-56 overflow-auto">
-                            <button type="button" className={`w-full text-left px-3 py-2 hover:bg-gray-50 text-sm ${selectedCustomer?.identification === "CF" ? "bg-gray-50" : ""}`} onClick={async () => { try { const cf = await ensureConsumidorFinal(); setSelectedCustomerId(cf.id); setPayError(null); setIsCustomerDropdownOpen(false); } catch (e: any) { setPayError(e?.message ?? "Error."); } }} disabled={savingSale}><div className="font-extrabold">CONSUMIDOR FINAL</div><div className="text-xs text-gray-500">Identificación: CF</div></button>
-                            <div className="border-t border-gray-200" />
-                            {filteredCustomers.map((c) => (<button key={c.id} type="button" className={`w-full text-left px-3 py-2 hover:bg-gray-50 text-sm ${selectedCustomerId === c.id ? "bg-gray-50" : ""}`} onClick={() => { setSelectedCustomerId(c.id); setPayError(null); setIsCustomerDropdownOpen(false); }} disabled={savingSale}><div className="font-extrabold">{c.name}</div><div className="text-xs text-gray-500">{c.identification}{c.phone ? ` • ${c.phone}` : ""}</div></button>))}
-                            {filteredCustomers.length === 0 && <div className="px-3 py-3 text-sm text-gray-500">Sin resultados.</div>}
+
+                {/* Body — dos columnas */}
+                <div className="flex-1 overflow-auto grid grid-cols-2 divide-x divide-gray-200">
+
+                  {/* ── IZQUIERDA — métodos + calculadora ── */}
+                  <div className="p-4 space-y-4 overflow-auto">
+
+                    {/* Métodos de pago */}
+                    <div>
+                      <div className="text-xs font-extrabold text-gray-500 uppercase tracking-wider mb-3">Método de pago</div>
+                      <div className="space-y-2">
+                        {(["CASH", "CARD", "TRANSFER", "QR"] as PaymentMethod[]).map((method) => {
+                          const labels: Record<PaymentMethod, string> = { CASH: "Efectivo", CARD: "Tarjeta", TRANSFER: "Transferencia", QR: "QR" };
+                          const stateMap: Record<PaymentMethod, { val: string; set: (v: string) => void }> = {
+                            CASH:     { val: cash,     set: setCash },
+                            CARD:     { val: card,     set: setCard },
+                            TRANSFER: { val: transfer, set: setTransfer },
+                            QR:       { val: qr,       set: setQr },
+                          };
+                          const isChecked = toNum(stateMap[method].val) > 0 || (method === "CASH" && cash !== "0") || (method === "CARD" && card !== "0") || (method === "TRANSFER" && transfer !== "0") || (method === "QR" && qr !== "0");
+
+                          const handleCheck = (checked: boolean) => {
+  if (!checked) stateMap[method].set("0");
+  else stateMap[method].set("");
+};
+
+                          const checked = stateMap[method].val !== "0";
+
+                          return (
+                            <div key={method}>
+                              <label className="flex items-center gap-3 cursor-pointer select-none">
+                                <input
+                                  type="checkbox"
+                                  className="h-4 w-4 rounded"
+                                  checked={checked}
+                                  disabled={savingSale}
+                                  onChange={(e) => handleCheck(e.target.checked)}
+                                />
+                                <span className="text-sm font-semibold">{labels[method]}</span>
+                              </label>
+                              {checked && (
+  <div className="mt-2 ml-7" onDoubleClick={() => stateMap[method].set(String(total))}>
+    <PayInput
+      label=""
+      value={stateMap[method].val}
+      setValue={stateMap[method].set}
+      disabled={savingSale}
+    />
+  </div>
+)}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Calculadora de cambio — siempre visible */}
+                    <div className="rounded-2xl border border-gray-200 p-3 space-y-3">
+                      <div className="text-xs font-extrabold text-gray-500 uppercase tracking-wider">Calculadora de cambio</div>
+
+                      {/* Billetes */}
+                      <div className="flex gap-2">
+                        {BILLS.map((bill) => (
+                          <button
+                            key={bill}
+                            type="button"
+                            disabled={savingSale || bill < total}
+                            onClick={() => { setSelectedBill(selectedBill === bill ? null : bill); setCustomBillValue(""); }}
+                            className={`flex-1 rounded-2xl border px-2 py-2 text-xs font-extrabold transition
+                              ${selectedBill === bill
+                                ? "border-emerald-500 bg-emerald-50 text-emerald-700"
+                                : bill < total
+                                  ? "border-gray-200 bg-gray-50 text-gray-300 cursor-not-allowed"
+                                  : "border-gray-200 bg-white text-gray-700 hover:border-gray-400"
+                              }`}
+                          >
+                            ${bill.toLocaleString("es-CO")}
+                          </button>
+                        ))}
+                      </div>
+
+                      {/* Valor personalizado */}
+                      <div className="flex gap-2 items-center">
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          className="input flex-1"
+                          placeholder="Otro valor recibido..."
+                          value={customBillValue}
+                          onChange={(e) => {
+                            const raw = e.target.value.replace(/\./g, "").replace(/\D/g, "");
+                            if (raw === "") { setCustomBillValue(""); setSelectedBill(null); return; }
+                            setCustomBillValue(Number(raw).toLocaleString("es-CO"));
+                            setSelectedBill(null);
+                          }}
+                          disabled={savingSale}
+                        />
+                        {customBillValue && (
+                          <button type="button" className="btn" onClick={() => setCustomBillValue("")} disabled={savingSale}>✕</button>
+                        )}
+                      </div>
+
+                      {/* Resultado cambio — billete predefinido */}
+                      {selectedBill !== null && billChange !== null && (
+                        <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-3">
+                          <div className="flex justify-between text-sm text-emerald-700 mb-1">
+                            <span>Recibido</span><span className="font-extrabold">${selectedBill.toLocaleString("es-CO")}</span>
                           </div>
-                          <div className="p-3 border-t border-gray-200">
-                            <button type="button" className="btn w-full" onClick={() => setShowCreateCustomer((v) => !v)} disabled={savingSale || creatingCustomer}>{showCreateCustomer ? "Ocultar crear cliente" : "Crear cliente rápido"}</button>
-                            {showCreateCustomer && (<div className="mt-3 rounded-2xl border border-gray-200 p-3 space-y-2"><label className="grid gap-1"><span className="label">Identificación</span><input className="input" value={newCustId} onChange={(e) => setNewCustId(e.target.value)} disabled={savingSale} /></label><label className="grid gap-1"><span className="label">Nombre</span><input className="input" value={newCustName} onChange={(e) => setNewCustName(e.target.value)} disabled={savingSale} /></label><label className="grid gap-1"><span className="label">Teléfono (opcional)</span><input className="input" value={newCustPhone} onChange={(e) => setNewCustPhone(e.target.value)} disabled={savingSale} /></label><label className="grid gap-1"><span className="label">Email (opcional)</span><input className="input" value={newCustEmail} onChange={(e) => setNewCustEmail(e.target.value)} disabled={savingSale} /></label><button className="btn btn-primary w-full" onClick={createCustomerQuick} disabled={savingSale || creatingCustomer}>{creatingCustomer ? "Creando..." : "Crear cliente"}</button></div>)}
+                          <div className="flex justify-between border-t border-emerald-200 pt-2 mt-1">
+                            <span className="text-base font-extrabold text-emerald-700">Cambio</span>
+                            <span className="text-xl font-black text-emerald-700">${billChange.toLocaleString("es-CO")}</span>
                           </div>
                         </div>
                       )}
+
+                      {/* Resultado cambio — valor personalizado */}
+                      {(() => {
+                        const custom = toNum(customBillValue);
+                        if (!customBillValue || custom <= 0) return null;
+                        const change = Math.round((custom - total) * 100) / 100;
+                        return (
+                          <div className={`rounded-2xl border p-3 ${change < 0 ? "border-red-200 bg-red-50" : "border-emerald-200 bg-emerald-50"}`}>
+                            <div className={`flex justify-between text-sm mb-1 ${change < 0 ? "text-red-700" : "text-emerald-700"}`}>
+                              <span>Recibido</span><span className="font-extrabold">${custom.toLocaleString("es-CO")}</span>
+                            </div>
+                            <div className={`flex justify-between border-t pt-2 mt-1 ${change < 0 ? "border-red-200" : "border-emerald-200"}`}>
+                              <span className={`text-base font-extrabold ${change < 0 ? "text-red-700" : "text-emerald-700"}`}>{change < 0 ? "Falta" : "Cambio"}</span>
+                              <span className={`text-xl font-black ${change < 0 ? "text-red-700" : "text-emerald-700"}`}>${Math.abs(change).toLocaleString("es-CO")}</span>
+                            </div>
+                          </div>
+                        );
+                      })()}
                     </div>
                   </div>
 
-                  <div className="rounded-2xl border border-gray-200 p-3">
-                    <div className="mb-2 text-sm font-extrabold">Calculadora de cambio</div>
-                    <div className="text-xs text-gray-500 mb-3">Selecciona un billete o escribe el monto recibido.</div>
-                    <div className="flex gap-2 mb-3">
-                      {BILLS.map((bill) => (<button key={bill} type="button" disabled={savingSale || bill < total} onClick={() => { setSelectedBill(selectedBill === bill ? null : bill); setCustomBillValue(""); }} className={`flex-1 rounded-2xl border px-3 py-2 text-sm font-extrabold transition ${selectedBill === bill ? "border-emerald-500 bg-emerald-50 text-emerald-700" : bill < total ? "border-gray-200 bg-gray-50 text-gray-300 cursor-not-allowed" : "border-gray-200 bg-white text-gray-700 hover:border-gray-400"}`}>${bill.toLocaleString("es-CO")}</button>))}
+                  {/* ── DERECHA — cliente + resumen + acción ── */}
+                  <div className="p-4 flex flex-col gap-4 overflow-auto">
+
+                    {/* Cliente */}
+                    <div>
+                      <div className="text-xs font-extrabold text-gray-500 uppercase tracking-wider mb-2">Cliente</div>
+                      <div className="relative">
+                        <button
+                          type="button"
+                          className="btn w-full justify-between"
+                          onClick={() => setIsCustomerDropdownOpen((v) => !v)}
+                          disabled={savingSale}
+                        >
+                          <span className="truncate">{selectedCustomer ? `${selectedCustomer.name} (${selectedCustomer.identification})` : "Seleccionar cliente…"}</span>
+                          <span className="ml-2 text-gray-500">▾</span>
+                        </button>
+                        {isCustomerDropdownOpen && (
+                          <div className="absolute z-50 mt-2 w-full rounded-2xl border border-gray-200 bg-white shadow-lg overflow-hidden">
+                            <div className="p-3 border-b border-gray-200">
+                              <label className="grid gap-1">
+                                <span className="label">Buscar</span>
+                                <input className="input" value={customerSearch} onChange={(e) => setCustomerSearch(e.target.value)} placeholder="Nombre, identificación…" disabled={savingSale} />
+                              </label>
+                            </div>
+                            <div className="max-h-48 overflow-auto">
+                              <button
+                                type="button"
+                                className={`w-full text-left px-3 py-2 hover:bg-gray-50 text-sm ${selectedCustomer?.identification === "CF" ? "bg-gray-50" : ""}`}
+                                onClick={async () => { try { const cf = await ensureConsumidorFinal(); setSelectedCustomerId(cf.id); setPayError(null); setIsCustomerDropdownOpen(false); } catch (e: any) { setPayError(e?.message ?? "Error."); } }}
+                                disabled={savingSale}
+                              >
+                                <div className="font-extrabold">CONSUMIDOR FINAL</div>
+                                <div className="text-xs text-gray-500">Identificación: CF</div>
+                              </button>
+                              <div className="border-t border-gray-200" />
+                              {filteredCustomers.map((c) => (
+                                <button
+                                  key={c.id}
+                                  type="button"
+                                  className={`w-full text-left px-3 py-2 hover:bg-gray-50 text-sm ${selectedCustomerId === c.id ? "bg-gray-50" : ""}`}
+                                  onClick={() => { setSelectedCustomerId(c.id); setPayError(null); setIsCustomerDropdownOpen(false); }}
+                                  disabled={savingSale}
+                                >
+                                  <div className="font-extrabold">{c.name}</div>
+                                  <div className="text-xs text-gray-500">{c.identification}{c.phone ? ` • ${c.phone}` : ""}</div>
+                                </button>
+                              ))}
+                              {filteredCustomers.length === 0 && <div className="px-3 py-3 text-sm text-gray-500">Sin resultados.</div>}
+                            </div>
+                            <div className="p-3 border-t border-gray-200">
+                              <button type="button" className="btn w-full" onClick={() => setShowCreateCustomer((v) => !v)} disabled={savingSale || creatingCustomer}>
+                                {showCreateCustomer ? "Ocultar crear cliente" : "Crear cliente rápido"}
+                              </button>
+                              {showCreateCustomer && (
+                                <div className="mt-3 rounded-2xl border border-gray-200 p-3 space-y-2">
+                                  <label className="grid gap-1"><span className="label">Identificación</span><input className="input" value={newCustId} onChange={(e) => setNewCustId(e.target.value)} disabled={savingSale} /></label>
+                                  <label className="grid gap-1"><span className="label">Nombre</span><input className="input" value={newCustName} onChange={(e) => setNewCustName(e.target.value)} disabled={savingSale} /></label>
+                                  <label className="grid gap-1"><span className="label">Teléfono (opcional)</span><input className="input" value={newCustPhone} onChange={(e) => setNewCustPhone(e.target.value)} disabled={savingSale} /></label>
+                                  <label className="grid gap-1"><span className="label">Email (opcional)</span><input className="input" value={newCustEmail} onChange={(e) => setNewCustEmail(e.target.value)} disabled={savingSale} /></label>
+                                  <button className="btn btn-primary w-full" onClick={createCustomerQuick} disabled={savingSale || creatingCustomer}>{creatingCustomer ? "Creando..." : "Crear cliente"}</button>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        )}
+                      </div>
                     </div>
-                    <div className="flex gap-2 items-center">
-                      <input type="text" inputMode="numeric" className="input flex-1" placeholder="Otro valor recibido..." value={customBillValue} onChange={(e) => { const raw = e.target.value.replace(/\./g, "").replace(/\D/g, ""); if (raw === "") { setCustomBillValue(""); setSelectedBill(null); return; } setCustomBillValue(Number(raw).toLocaleString("es-CO")); setSelectedBill(null); }} disabled={savingSale} />
-                      {customBillValue && (<button type="button" className="btn" onClick={() => setCustomBillValue("")} disabled={savingSale}>✕</button>)}
+
+                    {/* Resumen de la venta */}
+                    <div className="rounded-2xl border border-gray-200 bg-gray-50 p-3 space-y-2">
+                      <div className="text-xs font-extrabold text-gray-500 uppercase tracking-wider mb-1">Resumen</div>
+                      <div className="flex justify-between text-sm">
+                        <span className="text-gray-500">Total bruto</span>
+                        <span className="font-semibold">${total.toLocaleString("es-CO")}</span>
+                      </div>
+                      <div className="flex justify-between text-sm">
+                        <span className="text-gray-500">Subtotal (sin imp.)</span>
+                        <span className="font-semibold">${subtotal.toLocaleString("es-CO")}</span>
+                      </div>
+                      <div className="flex justify-between text-sm">
+                        <span className="text-gray-500">Impoconsumo ({(taxRate * 100).toFixed(0)}%)</span>
+                        <span className="font-semibold">${taxTotal.toLocaleString("es-CO")}</span>
+                      </div>
+                      <div className="flex justify-between border-t border-gray-200 pt-2 mt-1">
+                        <span className="text-base font-extrabold">Total a pagar</span>
+                        <span className="text-base font-extrabold">${total.toLocaleString("es-CO")}</span>
+                      </div>
                     </div>
-                    {selectedBill !== null && billChange !== null && (<div className="mt-3 rounded-2xl border border-emerald-200 bg-emerald-50 p-3"><div className="flex items-center justify-between"><span className="text-sm text-emerald-700">Billete</span><span className="text-sm font-extrabold text-emerald-800">${selectedBill.toLocaleString("es-CO")}</span></div><div className="mt-1 flex items-center justify-between"><span className="text-sm text-emerald-700">Total venta</span><span className="text-sm font-extrabold text-emerald-800">${total.toLocaleString("es-CO")}</span></div><div className="mt-2 flex items-center justify-between border-t border-emerald-200 pt-2"><span className="text-base font-extrabold text-emerald-700">Cambio</span><span className="text-xl font-black text-emerald-700">${billChange.toLocaleString("es-CO")}</span></div></div>)}
-                    {(() => { const custom = toNum(customBillValue); if (!customBillValue || custom <= 0) return null; const change = Math.round((custom - total) * 100) / 100; return (<div className={`mt-3 rounded-2xl border p-3 ${change < 0 ? "border-red-200 bg-red-50" : "border-emerald-200 bg-emerald-50"}`}><div className="flex items-center justify-between"><span className={`text-sm ${change < 0 ? "text-red-700" : "text-emerald-700"}`}>Valor recibido</span><span className={`text-sm font-extrabold ${change < 0 ? "text-red-800" : "text-emerald-800"}`}>${custom.toLocaleString("es-CO")}</span></div><div className="mt-1 flex items-center justify-between"><span className={`text-sm ${change < 0 ? "text-red-700" : "text-emerald-700"}`}>Total venta</span><span className={`text-sm font-extrabold ${change < 0 ? "text-red-800" : "text-emerald-800"}`}>${total.toLocaleString("es-CO")}</span></div><div className={`mt-2 flex items-center justify-between border-t pt-2 ${change < 0 ? "border-red-200" : "border-emerald-200"}`}><span className={`text-base font-extrabold ${change < 0 ? "text-red-700" : "text-emerald-700"}`}>{change < 0 ? "Falta" : "Cambio"}</span><span className={`text-xl font-black ${change < 0 ? "text-red-700" : "text-emerald-700"}`}>${Math.abs(change).toLocaleString("es-CO")}</span></div></div>); })()}
+
+                    {/* Resumen pagos ingresados */}
+                    <div className="rounded-2xl border border-gray-200 p-3 space-y-1">
+                      <div className="text-xs font-extrabold text-gray-500 uppercase tracking-wider mb-1">Pagos ingresados</div>
+                      {[
+                        { label: "Efectivo", val: cash },
+                        { label: "Tarjeta", val: card },
+                        { label: "Transferencia", val: transfer },
+                        { label: "QR", val: qr },
+                      ].filter(({ val }) => toNum(val) > 0).map(({ label, val }) => (
+                        <div key={label} className="flex justify-between text-sm">
+                          <span className="text-gray-500">{label}</span>
+                          <span className="font-semibold">${toNum(val).toLocaleString("es-CO")}</span>
+                        </div>
+                      ))}
+                      {paymentsSum > 0 && (
+                        <div className={`flex justify-between text-sm border-t border-gray-200 pt-2 mt-1 ${Math.round((paymentsSum - total) * 100) / 100 !== 0 ? "text-red-600" : "text-emerald-700"}`}>
+                          <span className="font-extrabold">Total pagado</span>
+                          <span className="font-extrabold">${paymentsSum.toLocaleString("es-CO")}</span>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Cambio a entregar (resumen derecha) */}
+                    {selectedBill !== null && billChange !== null && billChange >= 0 && (
+                      <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-3 flex justify-between items-center">
+                        <span className="text-sm font-extrabold text-emerald-700">Cambio a entregar</span>
+                        <span className="text-xl font-black text-emerald-700">${billChange.toLocaleString("es-CO")}</span>
+                      </div>
+                    )}
+                    {customBillValue && toNum(customBillValue) >= total && (
+                      <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-3 flex justify-between items-center">
+                        <span className="text-sm font-extrabold text-emerald-700">Cambio a entregar</span>
+                        <span className="text-xl font-black text-emerald-700">${Math.round((toNum(customBillValue) - total) * 100 / 100).toLocaleString("es-CO")}</span>
+                      </div>
+                    )}
+
+                    {payError && <div className="alert-err whitespace-pre-line">{payError}</div>}
+
+                    {/* Botones */}
+                    <div className="flex flex-col gap-2 mt-auto">
+                      <button
+                        className="btn btn-primary w-full"
+                        onClick={saveSale}
+                        disabled={savingSale}
+                      >
+                        {savingSale ? "Guardando..." : "Guardar y enviar a la DIAN"}
+                      </button>
+                      <button className="btn w-full" onClick={closePayModal} disabled={savingSale}>
+                        Cancelar
+                      </button>
+                    </div>
                   </div>
 
-                  <PayInput label="Efectivo" value={cash} setValue={setCash} disabled={savingSale} />
-                  <PayInput label="Tarjeta" value={card} setValue={setCard} disabled={savingSale} />
-                  <PayInput label="Transferencia" value={transfer} setValue={setTransfer} disabled={savingSale} />
-                  <PayInput label="QR" value={qr} setValue={setQr} disabled={savingSale} />
-                  <div className="text-sm"><span className="font-bold">Pagos:</span> ${paymentsSum.toLocaleString("es-CO")}</div>
-                  {payError && <div className="alert-err whitespace-pre-line">{payError}</div>}
-                  <div className="flex gap-2 pt-2">
-                    <button className="btn flex-1" onClick={closePayModal} disabled={savingSale}>Cancelar</button>
-                    <button className="btn btn-primary flex-1" onClick={saveSale} disabled={savingSale}>{savingSale ? "Guardando..." : "Confirmar pago"}</button>
-                  </div>
                 </div>
               </div>
             </div>
@@ -697,10 +954,51 @@ function TotalsRow({ label, value, bold }: { label: string; value: number; bold?
   return (<div className={`flex justify-between ${bold ? "text-base font-extrabold" : "text-sm"}`}><span className={bold ? "" : "text-gray-600"}>{label}</span><span>${value.toLocaleString("es-CO")}</span></div>);
 }
 
-function PayInput({ label, value, setValue, disabled }: { label: string; value: string; setValue: (v: string) => void; disabled: boolean }) {
-  const formatDisplay = (raw: string) => { if (!raw) return ""; const withDot = raw.replace(",", "."); const [intPart, decPart] = withDot.split("."); const intFormatted = intPart ? Number(intPart).toLocaleString("es-CO") : "0"; if (decPart !== undefined) return `${intFormatted},${decPart}`; return intFormatted; };
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => { const raw = e.target.value.replace(/\./g, "").replace(",", "."); if (!/^\d*\.?\d{0,2}$/.test(raw)) return; setValue(raw); };
-  return (<label className="grid gap-1"><span className="label">{label}</span><input type="text" inputMode="decimal" value={formatDisplay(value)} disabled={disabled} onChange={handleChange} placeholder="0" className="input" /></label>);
+function PayInput({ label, value, setValue, disabled }: { 
+  label: string; 
+  value: string; 
+  setValue: (v: string) => void; 
+  disabled: boolean 
+}) {
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const raw = e.target.value.replace(/\D/g, ""); // SOLO números
+
+    if (!raw) {
+      setValue("");
+      return;
+    }
+
+    // Convertir a número real con 2 decimales
+    const num = Number(raw) / 100;
+
+    setValue(num.toString());
+  };
+
+  const formatDisplay = (raw: string) => {
+    if (!raw) return "";
+    const num = Number(raw);
+    if (isNaN(num)) return "";
+    return num.toLocaleString("es-CO", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    });
+  };
+
+  return (
+    <label className="grid gap-1">
+      <span className="label">{label}</span>
+      <input
+        type="text"
+        inputMode="numeric"
+        value={formatDisplay(value)}
+        disabled={disabled}
+        onChange={handleChange}
+        placeholder="0"
+        className="input"
+      />
+    </label>
+  );
 }
 
 function TicketInline({ saleId, onPrinted }: { saleId: string; onPrinted: () => void }) {
