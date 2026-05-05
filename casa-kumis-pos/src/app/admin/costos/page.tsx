@@ -79,6 +79,43 @@ export default function AdminCostosPage() {
   const [editStateName, setEditStateName] = useState("");
   const [savingEditState, setSavingEditState] = useState(false);
 
+  // PRODUCCIÓN
+  const [tipoRegistro, setTipoRegistro] = useState<"entrada" | "transformacion" | "merma" | "produccion">("entrada");
+
+  // ENTRADA INICIAL
+  const [selectedMaterial, setSelectedMaterial] = useState("");
+  const [selectedState, setSelectedState] = useState("");
+  const [entradaCantidad, setEntradaCantidad] = useState("");
+  const [entradaCosto, setEntradaCosto] = useState("");
+  const [entradaProveedor, setEntradaProveedor] = useState("");
+  const [entradaLote, setEntradaLote] = useState("");
+  const [entradaObservaciones, setEntradaObservaciones] = useState("");
+  const [savingEntrada, setSavingEntrada] = useState(false);
+
+  // TRANSFORMACIÓN
+  const [transformMaterial, setTransformMaterial] = useState("");
+  const [transformFromState, setTransformFromState] = useState("");
+  const [transformToState, setTransformToState] = useState("");
+  const [transformQtyIn, setTransformQtyIn] = useState("");
+  const [transformQtyOut, setTransformQtyOut] = useState("");
+  const [transformObservaciones, setTransformObservaciones] = useState("");
+  const [savingTransform, setSavingTransform] = useState(false);
+
+  // MERMA ADICIONAL
+  const [batchSelect, setBatchSelect] = useState("");
+  const [wasteType, setWasteType] = useState("");
+  const [wasteQty, setWasteQty] = useState("");
+  const [wasteReason, setWasteReason] = useState("");
+  const [savingWaste, setSavingWaste] = useState(false);
+  const [wasteTypes, setWasteTypes] = useState<Array<{ id: string; name: string; code: string }>>([]);
+
+  // PRODUCCIÓN
+  const [produceProduct, setProduceProduct] = useState("");
+  const [produceQty, setProduceQty] = useState("");
+  const [produceObservations, setProduceObservations] = useState("");
+  const [savingProduce, setSavingProduce] = useState(false);
+  const [products, setProducts] = useState<Array<{ id: string; name: string }>>([]);
+
   const TABS: { id: Tab; label: string; icon: string }[] = [
     { id: "materias-primas", label: "Materias Primas", icon: "📦" },
     { id: "produccion", label: "Producción", icon: "🏭" },
@@ -402,6 +439,253 @@ export default function AdminCostosPage() {
   };
 
   // ============================================================================
+  // FUNCIONES PARA PRODUCCIÓN
+  // ============================================================================
+
+  // Cargar tipos de merma y productos
+  const cargarDatosProduccion = async () => {
+    try {
+      const { data: types } = await supabase.from("waste_types").select("*").eq("is_active", true);
+      setWasteTypes(types ?? []);
+
+      const { data: prods } = await supabase.from("products").select("id, name").eq("is_active", true);
+      setProducts(prods ?? []);
+    } catch (e) {
+      console.error("Error cargando datos producción:", e);
+    }
+  };
+
+  // Efecto para recargar datos cuando cambias de tab
+  useEffect(() => {
+    if (activeTab === "materias-primas") {
+      cargarMaterialesPrimas();
+    }
+    if (activeTab === "produccion") {
+      cargarDatosProduccion();
+    }
+  }, [activeTab]);
+
+  // REGISTRAR ENTRADA INICIAL
+  const registrarEntrada = async () => {
+    if (!selectedMaterial || !selectedState || !entradaCantidad) {
+      setErr("Selecciona material, estado y cantidad.");
+      return;
+    }
+
+    const qty = parseFloat(entradaCantidad);
+    const cost = entradaCosto ? parseFloat(entradaCosto) : null;
+
+    if (isNaN(qty) || qty <= 0) {
+      setErr("Cantidad debe ser mayor a 0.");
+      return;
+    }
+
+    setSavingEntrada(true);
+    try {
+      const session = await supabase.auth.getSession();
+      const userId = session.data.session?.user.id;
+
+      // Registrar batch
+      const { data: batchData, error: batchError } = await supabase
+        .from("raw_material_batches")
+        .insert([
+          {
+            raw_material_id: selectedMaterial,
+            from_state_id: null,
+            to_state_id: selectedState,
+            quantity_in: qty,
+            quantity_out: qty,
+            cost: cost,
+            batch_date: new Date().toISOString().split("T")[0],
+            supplier_name: entradaProveedor || null,
+            lot_code: entradaLote || null,
+            observations: entradaObservaciones || null,
+            created_by: userId,
+          },
+        ])
+        .select();
+
+      if (batchError) throw new Error(batchError.message);
+
+      // Actualizar inventario
+      const { data: invData } = await supabase
+        .from("raw_material_inventory")
+        .select("*")
+        .eq("raw_material_id", selectedMaterial)
+        .eq("state_id", selectedState);
+
+      if (invData && invData[0]) {
+        await supabase
+          .from("raw_material_inventory")
+          .update({ quantity: (invData[0].quantity || 0) + qty, last_updated: new Date().toISOString() })
+          .eq("id", invData[0].id);
+      } else {
+        await supabase.from("raw_material_inventory").insert([
+          {
+            raw_material_id: selectedMaterial,
+            state_id: selectedState,
+            quantity: qty,
+          },
+        ]);
+      }
+
+      // Registrar audit log
+      await supabase.from("raw_material_inventory_audit_logs").insert([
+        {
+          raw_material_id: selectedMaterial,
+          state_id: selectedState,
+          quantity_before: invData?.[0]?.quantity || 0,
+          quantity_after: (invData?.[0]?.quantity || 0) + qty,
+          reason: "Entrada inicial",
+          related_id: batchData?.[0]?.id,
+        },
+      ]);
+
+      setSelectedMaterial("");
+      setSelectedState("");
+      setEntradaCantidad("");
+      setEntradaCosto("");
+      setEntradaProveedor("");
+      setEntradaLote("");
+      setEntradaObservaciones("");
+      await cargarMaterialesPrimas();
+      setErr(null);
+    } catch (e: any) {
+      setErr(e.message ?? "Error registrando entrada.");
+    } finally {
+      setSavingEntrada(false);
+    }
+  };
+
+  // REGISTRAR TRANSFORMACIÓN
+  const registrarTransformacion = async () => {
+    if (!transformMaterial || !transformFromState || !transformToState || !transformQtyIn || !transformQtyOut) {
+      setErr("Completa todos los campos de transformación.");
+      return;
+    }
+
+    const qtyIn = parseFloat(transformQtyIn);
+    const qtyOut = parseFloat(transformQtyOut);
+
+    if (isNaN(qtyIn) || isNaN(qtyOut) || qtyIn <= 0 || qtyOut < 0) {
+      setErr("Cantidades inválidas.");
+      return;
+    }
+
+    setSavingTransform(true);
+    try {
+      const session = await supabase.auth.getSession();
+      const userId = session.data.session?.user.id;
+
+      // Registrar batch de transformación
+      const { data: batchData, error: batchError } = await supabase
+        .from("raw_material_batches")
+        .insert([
+          {
+            raw_material_id: transformMaterial,
+            from_state_id: transformFromState,
+            to_state_id: transformToState,
+            quantity_in: qtyIn,
+            quantity_out: qtyOut,
+            batch_date: new Date().toISOString().split("T")[0],
+            observations: transformObservaciones || null,
+            created_by: userId,
+          },
+        ])
+        .select();
+
+      if (batchError) throw new Error(batchError.message);
+
+      // Obtener cantidad actual del estado origen
+      const { data: originData } = await supabase
+        .from("raw_material_inventory")
+        .select("*")
+        .eq("raw_material_id", transformMaterial)
+        .eq("state_id", transformFromState);
+
+      if (originData && originData[0]) {
+        const newQty = (originData[0].quantity || 0) - qtyIn;
+        await supabase
+          .from("raw_material_inventory")
+          .update({ quantity: newQty, last_updated: new Date().toISOString() })
+          .eq("id", originData[0].id);
+
+        // Audit log origen
+        await supabase.from("raw_material_inventory_audit_logs").insert([
+          {
+            raw_material_id: transformMaterial,
+            state_id: transformFromState,
+            quantity_before: originData[0].quantity || 0,
+            quantity_after: newQty,
+            reason: "Transformación",
+            related_id: batchData?.[0]?.id,
+          },
+        ]);
+      }
+
+      // Obtener cantidad actual del estado destino
+      const { data: destData } = await supabase
+        .from("raw_material_inventory")
+        .select("*")
+        .eq("raw_material_id", transformMaterial)
+        .eq("state_id", transformToState);
+
+      if (destData && destData[0]) {
+        const newQty = (destData[0].quantity || 0) + qtyOut;
+        await supabase
+          .from("raw_material_inventory")
+          .update({ quantity: newQty, last_updated: new Date().toISOString() })
+          .eq("id", destData[0].id);
+
+        // Audit log destino
+        await supabase.from("raw_material_inventory_audit_logs").insert([
+          {
+            raw_material_id: transformMaterial,
+            state_id: transformToState,
+            quantity_before: destData[0].quantity || 0,
+            quantity_after: newQty,
+            reason: "Transformación",
+            related_id: batchData?.[0]?.id,
+          },
+        ]);
+      } else {
+        await supabase.from("raw_material_inventory").insert([
+          {
+            raw_material_id: transformMaterial,
+            state_id: transformToState,
+            quantity: qtyOut,
+          },
+        ]);
+
+        // Audit log destino (nuevo)
+        await supabase.from("raw_material_inventory_audit_logs").insert([
+          {
+            raw_material_id: transformMaterial,
+            state_id: transformToState,
+            quantity_before: 0,
+            quantity_after: qtyOut,
+            reason: "Transformación",
+            related_id: batchData?.[0]?.id,
+          },
+        ]);
+      }
+
+      setTransformMaterial("");
+      setTransformFromState("");
+      setTransformToState("");
+      setTransformQtyIn("");
+      setTransformQtyOut("");
+      setTransformObservaciones("");
+      await cargarMaterialesPrimas();
+      setErr(null);
+    } catch (e: any) {
+      setErr(e.message ?? "Error registrando transformación.");
+    } finally {
+      setSavingTransform(false);
+    }
+  };
+
+  // ============================================================================
   // RENDER
   // ============================================================================
 
@@ -498,14 +782,36 @@ export default function AdminCostosPage() {
                         </div>
                       </div>
 
-                      {/* Estados de esta materia */}
+                      {/* Estados de esta materia con inventario */}
                       {statesByMaterial[mat.id] && statesByMaterial[mat.id].length > 0 ? (
-                        <div className="bg-gray-50 rounded-xl p-3 border border-gray-200">
-                          <div className="text-xs font-semibold text-gray-600 mb-2 uppercase tracking-wider">Estados</div>
-                          <div className="flex flex-wrap gap-2 mb-3">
-                            {statesByMaterial[mat.id].map((state) => (
-                              <Badge key={state.id} label={state.name} color="gray" size="sm" />
-                            ))}
+                        <div className="bg-gray-50 rounded-xl p-3 border border-gray-200 space-y-3">
+                          <div className="text-xs font-semibold text-gray-600 uppercase tracking-wider">Estados e Inventario</div>
+                          <div className="space-y-2">
+                            {statesByMaterial[mat.id].map((state) => {
+                              const stateInventory = inventoryByMaterial[mat.id]?.find((inv) => inv.state_id === state.id);
+                              const qty = stateInventory?.quantity ?? 0;
+                              const stockColor =
+                                qty <= 0
+                                  ? "text-red-600 bg-red-50 border-red-200"
+                                  : qty <= 5
+                                    ? "text-amber-600 bg-amber-50 border-amber-200"
+                                    : "text-emerald-700 bg-emerald-50 border-emerald-200";
+
+                              return (
+                                <div
+                                  key={state.id}
+                                  className="flex items-center justify-between p-2 bg-white rounded-lg border border-gray-200"
+                                >
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-sm font-semibold text-gray-900">{state.name}</span>
+                                    <span className="text-xs text-gray-500">({state.order_num})</span>
+                                  </div>
+                                  <span className={`rounded-full border px-3 py-1 text-xs font-extrabold ${stockColor}`}>
+                                    {qty <= 0 ? "Sin stock" : `${qty} ${mat.unit}`}
+                                  </span>
+                                </div>
+                              );
+                            })}
                           </div>
                           <button
                             className="btn btn-primary text-sm w-full"
@@ -588,11 +894,277 @@ export default function AdminCostosPage() {
 
         {/* ────── TAB: PRODUCCIÓN ────── */}
         {activeTab === "produccion" && (
-          <EmptyState
-            icon="🏭"
-            title="Producción"
-            description="Aquí registrarás transformaciones, mermas y producción de productos."
-          />
+          <div className="space-y-6">
+            {/* Selector de tipo de registro */}
+            <CostsCard>
+              <div className="flex flex-wrap gap-2">
+                {[
+                  { id: "entrada", label: "📥 Entrada Inicial", color: "bg-blue-50 border-blue-200" },
+                  { id: "transformacion", label: "🔄 Transformación", color: "bg-purple-50 border-purple-200" },
+                  { id: "merma", label: "⚠️ Merma Adicional", color: "bg-red-50 border-red-200" },
+                  { id: "produccion", label: "🏭 Producción", color: "bg-emerald-50 border-emerald-200" },
+                ].map((tipo) => (
+                  <button
+                    key={tipo.id}
+                    onClick={() => setTipoRegistro(tipo.id as any)}
+                    className={`px-4 py-2 rounded-2xl border font-semibold text-sm transition ${
+                      tipoRegistro === tipo.id
+                        ? `${tipo.color} border-current`
+                        : "bg-white border-gray-200 text-gray-600 hover:border-gray-300"
+                    }`}
+                  >
+                    {tipo.label}
+                  </button>
+                ))}
+              </div>
+            </CostsCard>
+
+            {/* ENTRADA INICIAL */}
+            {tipoRegistro === "entrada" && (
+              <CostsCard title="Registrar Entrada Inicial" subtitle="Agrega una nueva cantidad de materia prima recibida">
+                <div className="space-y-4">
+                  <FormSelect
+                    label="Materia Prima"
+                    value={selectedMaterial}
+                    onChange={setSelectedMaterial}
+                    options={materialesPrimas.map((m) => ({ value: m.id, label: m.name }))}
+                    disabled={savingEntrada}
+                  />
+
+                  {selectedMaterial && (
+                    <FormSelect
+                      label="Estado"
+                      value={selectedState}
+                      onChange={setSelectedState}
+                      options={(statesByMaterial[selectedMaterial] ?? []).map((s) => ({ value: s.id, label: s.name }))}
+                      disabled={savingEntrada}
+                    />
+                  )}
+
+                  <FormInput
+                    label="Cantidad"
+                    value={entradaCantidad}
+                    onChange={setEntradaCantidad}
+                    type="number"
+                    placeholder="0"
+                    disabled={savingEntrada}
+                  />
+
+                  <FormInput
+                    label="Costo Total (opcional)"
+                    value={entradaCosto}
+                    onChange={setEntradaCosto}
+                    type="number"
+                    placeholder="$0"
+                    disabled={savingEntrada}
+                  />
+
+                  <FormInput
+                    label="Proveedor (opcional)"
+                    value={entradaProveedor}
+                    onChange={setEntradaProveedor}
+                    placeholder="Nombre del proveedor"
+                    disabled={savingEntrada}
+                  />
+
+                  <FormInput
+                    label="Código de Lote (opcional)"
+                    value={entradaLote}
+                    onChange={setEntradaLote}
+                    placeholder="Ej: LOTE-001"
+                    disabled={savingEntrada}
+                  />
+
+                  <FormInput
+                    label="Observaciones (opcional)"
+                    value={entradaObservaciones}
+                    onChange={setEntradaObservaciones}
+                    placeholder="Notas sobre esta entrada..."
+                    disabled={savingEntrada}
+                  />
+
+                  <button
+                    className="btn btn-primary w-full"
+                    onClick={registrarEntrada}
+                    disabled={savingEntrada}
+                  >
+                    {savingEntrada ? "Registrando..." : "Registrar Entrada"}
+                  </button>
+                </div>
+              </CostsCard>
+            )}
+
+            {/* TRANSFORMACIÓN */}
+            {tipoRegistro === "transformacion" && (
+              <CostsCard
+                title="Registrar Transformación"
+                subtitle="Registra cambios de estado (Ej: cruda → cocinada)"
+              >
+                <div className="space-y-4">
+                  <FormSelect
+                    label="Materia Prima"
+                    value={transformMaterial}
+                    onChange={setTransformMaterial}
+                    options={materialesPrimas.map((m) => ({ value: m.id, label: m.name }))}
+                    disabled={savingTransform}
+                  />
+
+                  {transformMaterial && (
+                    <>
+                      <FormSelect
+                        label="Estado Origen"
+                        value={transformFromState}
+                        onChange={setTransformFromState}
+                        options={(statesByMaterial[transformMaterial] ?? []).map((s) => ({ value: s.id, label: s.name }))}
+                        disabled={savingTransform}
+                      />
+
+                      <FormSelect
+                        label="Estado Destino"
+                        value={transformToState}
+                        onChange={setTransformToState}
+                        options={(statesByMaterial[transformMaterial] ?? [])
+                          .filter((s) => s.id !== transformFromState)
+                          .map((s) => ({ value: s.id, label: s.name }))}
+                        disabled={savingTransform}
+                      />
+                    </>
+                  )}
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <FormInput
+                      label="Cantidad Entrada"
+                      value={transformQtyIn}
+                      onChange={setTransformQtyIn}
+                      type="number"
+                      placeholder="0"
+                      disabled={savingTransform}
+                    />
+                    <FormInput
+                      label="Cantidad Salida"
+                      value={transformQtyOut}
+                      onChange={setTransformQtyOut}
+                      type="number"
+                      placeholder="0"
+                      disabled={savingTransform}
+                    />
+                  </div>
+
+                  {transformQtyIn && transformQtyOut && (
+                    <div className="bg-amber-50 border border-amber-200 rounded-2xl p-3">
+                      <div className="text-sm text-amber-700">
+                        <strong>Merma calculada:</strong> {(parseFloat(transformQtyIn) - parseFloat(transformQtyOut)).toFixed(2)} (
+                        {(((parseFloat(transformQtyIn) - parseFloat(transformQtyOut)) / parseFloat(transformQtyIn)) * 100).toFixed(1)}%)
+                      </div>
+                    </div>
+                  )}
+
+                  <FormInput
+                    label="Observaciones (opcional)"
+                    value={transformObservaciones}
+                    onChange={setTransformObservaciones}
+                    placeholder="Notas sobre esta transformación..."
+                    disabled={savingTransform}
+                  />
+
+                  <button
+                    className="btn btn-primary w-full"
+                    onClick={registrarTransformacion}
+                    disabled={savingTransform}
+                  >
+                    {savingTransform ? "Registrando..." : "Registrar Transformación"}
+                  </button>
+                </div>
+              </CostsCard>
+            )}
+
+            {/* MERMA ADICIONAL */}
+            {tipoRegistro === "merma" && (
+              <CostsCard title="Registrar Merma Adicional" subtitle="Registra pérdidas no esperadas (daño, desperdicio, etc.)">
+                <div className="space-y-4">
+                  <div className="bg-blue-50 border border-blue-200 rounded-2xl p-3">
+                    <p className="text-sm text-blue-700">
+                      <strong>Nota:</strong> Esto descuenta cantidad del inventario. Usa esto para ajustar cuando se pierde producto
+                      durante la producción.
+                    </p>
+                  </div>
+
+                  <FormSelect
+                    label="Tipo de Merma"
+                    value={wasteType}
+                    onChange={setWasteType}
+                    options={wasteTypes.map((w) => ({ value: w.id, label: `${w.name} (${w.code})` }))}
+                    disabled={savingWaste}
+                  />
+
+                  <FormInput
+                    label="Cantidad Pérdida"
+                    value={wasteQty}
+                    onChange={setWasteQty}
+                    type="number"
+                    placeholder="0"
+                    disabled={savingWaste}
+                  />
+
+                  <FormInput
+                    label="Razón / Observaciones"
+                    value={wasteReason}
+                    onChange={setWasteReason}
+                    placeholder="¿Por qué se perdió?"
+                    disabled={savingWaste}
+                  />
+
+                  <button
+                    className="btn btn-primary w-full"
+                    onClick={() => setErr("Funcionalidad en desarrollo")}
+                    disabled={savingWaste}
+                  >
+                    {savingWaste ? "Registrando..." : "Registrar Merma"}
+                  </button>
+                </div>
+              </CostsCard>
+            )}
+
+            {/* PRODUCCIÓN */}
+            {tipoRegistro === "produccion" && (
+              <CostsCard title="Registrar Producción" subtitle="Registra cuántos productos se hicieron">
+                <div className="space-y-4">
+                  <FormSelect
+                    label="Producto"
+                    value={produceProduct}
+                    onChange={setProduceProduct}
+                    options={products.map((p) => ({ value: p.id, label: p.name }))}
+                    disabled={savingProduce}
+                  />
+
+                  <FormInput
+                    label="Cantidad Producida"
+                    value={produceQty}
+                    onChange={setProduceQty}
+                    type="number"
+                    placeholder="0"
+                    disabled={savingProduce}
+                  />
+
+                  <FormInput
+                    label="Observaciones (opcional)"
+                    value={produceObservations}
+                    onChange={setProduceObservations}
+                    placeholder="Notas sobre esta producción..."
+                    disabled={savingProduce}
+                  />
+
+                  <button
+                    className="btn btn-primary w-full"
+                    onClick={() => setErr("Funcionalidad en desarrollo")}
+                    disabled={savingProduce}
+                  >
+                    {savingProduce ? "Registrando..." : "Registrar Producción"}
+                  </button>
+                </div>
+              </CostsCard>
+            )}
+          </div>
         )}
 
         {/* ────── TAB: FÓRMULAS ────── */}
