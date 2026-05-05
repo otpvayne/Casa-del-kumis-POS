@@ -39,6 +39,12 @@ export default function AdminPage() {
       badge: "Catálogo",
     },
     {
+  title: "Control de Costos",
+  desc: "Gestiona materias primas, transformaciones, mermas y reportes de producción.",
+  href: "/admin/costos",
+  badge: "Costos",
+},
+    {
       title: "Sucursales",
       desc: "Crea sucursales, edita nombre y activa/desactiva las sedes.",
       href: "/admin/branches",
