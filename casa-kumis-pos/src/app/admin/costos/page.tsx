@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { useRouter } from "next/navigation";
 import { requireRole } from "@/lib/requireRole";
@@ -18,6 +18,22 @@ import {
   CostsTable,
   CostsModal,
 } from "@/components/costos-components";
+import {
+  Plus,
+  Edit2,
+  Trash2,
+  AlertTriangle,
+  ArrowRightLeft,
+  Download,
+  Zap,
+  Info,
+  TrendingDown,
+  Package,
+  Factory,
+  ListChecks,
+  BarChart3,
+  Bell,
+} from "lucide-react";
 
 type Tab = "materias-primas" | "produccion" | "formulas" | "reportes" | "alertas";
 
@@ -69,6 +85,7 @@ export default function AdminCostosPage() {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<Tab>("materias-primas");
   const [err, setErr] = useState<string | null>(null);
+  const detallesRef = useRef<HTMLDivElement>(null);
 
   // Materias Primas
   const [materialesPrimas, setMaterialesPrimas] = useState<RawMaterial[]>([]);
@@ -161,13 +178,62 @@ export default function AdminCostosPage() {
   const [analisisQty, setAnalisisQty] = useState("");
   const [analisisResults, setAnalisisResults] = useState<any>(null);
 
-  const TABS: { id: Tab; label: string; icon: string }[] = [
-    { id: "materias-primas", label: "Materias Primas", icon: "📦" },
-    { id: "produccion", label: "Producción", icon: "🏭" },
-    { id: "formulas", label: "Fórmulas", icon: "📋" },
-    { id: "reportes", label: "Reportes", icon: "📊" },
-    { id: "alertas", label: "Alertas", icon: "🔔" },
+  // Fórmulas - Búsqueda y filtro
+  const [formulasSearchTerm, setFormulasSearchTerm] = useState("");
+  const [formulasOrderBy, setFormulasOrderBy] = useState<"name" | "ingredients" | "recent">("ingredients");
+
+  const TABS = [
+    { id: "materias-primas" as Tab, label: "Materias Primas" },
+    { id: "produccion" as Tab, label: "Producción" },
+    { id: "formulas" as Tab, label: "Fórmulas" },
+    { id: "reportes" as Tab, label: "Reportes" },
+    { id: "alertas" as Tab, label: "Alertas" },
   ];
+
+  // Función para obtener el icono según el tab
+  const getTabIcon = (tabId: string) => {
+    switch (tabId) {
+      case "materias-primas":
+        return <Package size={18} className="inline mr-2" />;
+      case "produccion":
+        return <Factory size={18} className="inline mr-2" />;
+      case "formulas":
+        return <ListChecks size={18} className="inline mr-2" />;
+      case "reportes":
+        return <BarChart3 size={18} className="inline mr-2" />;
+      case "alertas":
+        return <Bell size={18} className="inline mr-2" />;
+      default:
+        return null;
+    }
+  };
+
+  // Filtrar y ordenar fórmulas
+  const filteredAndSortedFormulas = useMemo(() => {
+    let result = [...formulas];
+
+    // Filtrar por búsqueda
+    if (formulasSearchTerm.trim()) {
+      result = result.filter((f) =>
+        f.name.toLowerCase().includes(formulasSearchTerm.toLowerCase())
+      );
+    }
+
+    // Ordenar
+    switch (formulasOrderBy) {
+      case "name":
+        result.sort((a, b) => a.name.localeCompare(b.name));
+        break;
+      case "ingredients":
+        result.sort((a, b) => b.ingredients.length - a.ingredients.length);
+        break;
+      case "recent":
+        result.reverse();
+        break;
+    }
+
+    return result;
+  }, [formulas, formulasSearchTerm, formulasOrderBy]);
 
   useEffect(() => {
     const run = async () => {
@@ -182,6 +248,15 @@ export default function AdminCostosPage() {
       setLoading(false);
     });
   }, [router]);
+
+  // Scroll automático a detalles cuando se selecciona una fórmula
+  useEffect(() => {
+    if (selectedFormula && detallesRef.current && activeTab === "formulas") {
+      setTimeout(() => {
+        detallesRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 100);
+    }
+  }, [selectedFormula, activeTab]);
 
   const cargarMaterialesPrimas = async () => {
     try {
@@ -1183,7 +1258,22 @@ export default function AdminCostosPage() {
 
         {/* Tabs Navigation */}
         <div className="overflow-x-auto -mx-8 px-8 mb-6">
-          <CostsTabs tabs={TABS} activeTab={activeTab} onTabChange={(tab) => setActiveTab(tab as Tab)} />
+          <div className="flex gap-1 border-b border-gray-200 pb-0 mb-6 overflow-x-auto scrollbar-hide">
+            {TABS.map((tab) => (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                className={`px-4 py-3 text-sm font-semibold whitespace-nowrap border-b-2 transition -mb-px flex items-center gap-1 ${
+                  activeTab === tab.id
+                    ? "border-blue-600 text-blue-700"
+                    : "border-transparent text-gray-500 hover:text-gray-700"
+                }`}
+              >
+                {getTabIcon(tab.id)}
+                {tab.label}
+              </button>
+            ))}
+          </div>
         </div>
 
         {/* ────── TAB: MATERIAS PRIMAS ────── */}
@@ -1216,18 +1306,34 @@ export default function AdminCostosPage() {
               title="Materias Primas"
               subtitle={`${materialesPrimas.length} materia(s) prima(s) registrada(s)`}
               action={
-                <button className="btn btn-primary" onClick={() => setShowAddMaterial(true)}>
-                  + Crear
+                <button 
+                  className="btn btn-primary flex items-center gap-2"
+                  onClick={() => setShowAddMaterial(true)}
+                  title="Crea una nueva materia prima. Necesitarás asignarle al menos un estado inicial."
+                >
+                  <Plus size={18} />
+                  Crear
                 </button>
               }
             >
               {materialesPrimas.length === 0 ? (
-                <EmptyState
-                  icon="📦"
-                  title="Sin materias primas"
-                  description="Crea tu primera materia prima para comenzar."
-                  action={<button className="btn btn-primary" onClick={() => setShowAddMaterial(true)}>+ Crear materia prima</button>}
-                />
+                <div className="rounded-2xl border-2 border-dashed border-gray-300 p-12 text-center bg-gray-50">
+                  <Package size={64} className="mx-auto mb-4 text-gray-300" strokeWidth={1.5} />
+                  <h3 className="text-xl font-bold text-gray-900 mb-2">
+                    No hay materias primas registradas
+                  </h3>
+                  <p className="text-gray-600 mb-6 max-w-md mx-auto">
+                    Comienza creando tu primera materia prima (ej: Carne, Papa, Harina).
+                    Luego podrás agregar estados y registrar su inventario.
+                  </p>
+                  <button 
+                    className="btn btn-primary inline-flex items-center gap-2"
+                    onClick={() => setShowAddMaterial(true)}
+                  >
+                    <Plus size={20} />
+                    Crear Primera Materia Prima
+                  </button>
+                </div>
               ) : (
                 <div className="space-y-2">
                   {materialesPrimas.map((mat) => (
@@ -1240,16 +1346,18 @@ export default function AdminCostosPage() {
                         <div className="flex items-center gap-2">
                           <Badge label={mat.unit} color="blue" size="sm" />
                           <button
-                            className="btn text-sm"
+                            className="p-2 hover:bg-gray-100 rounded-lg transition"
                             onClick={() => abrirEditarMaterial(mat)}
+                            title="Edita el nombre, unidad o descripción de esta materia prima."
                           >
-                            Editar
+                            <Edit2 size={16} className="text-gray-700" />
                           </button>
                           <button
-                            className="btn text-sm text-red-600"
+                            className="p-2 hover:bg-red-50 rounded-lg transition"
                             onClick={() => eliminarMaterial(mat.id)}
+                            title="Elimina esta materia prima y todos sus estados. Esta acción no se puede deshacer."
                           >
-                            Eliminar
+                            <Trash2 size={16} className="text-red-600" />
                           </button>
                         </div>
                       </div>
@@ -1286,13 +1394,15 @@ export default function AdminCostosPage() {
                             })}
                           </div>
                           <button
-                            className="btn btn-primary text-sm w-full"
+                            className="btn btn-primary text-sm w-full flex items-center justify-center gap-2"
                             onClick={() => {
                               setSelectedMaterialForStates(mat.id);
                               setShowAddState(true);
                             }}
+                            title="Agrega un nuevo estado para esta materia prima (ej: Cocinada, Molida)."
                           >
-                            + Agregar estado
+                            <Plus size={16} />
+                            Agregar Estado
                           </button>
                         </div>
                       ) : (
@@ -1344,15 +1454,20 @@ export default function AdminCostosPage() {
                           <div className="font-semibold text-gray-900">{state.name}</div>
                           <div className="text-xs text-gray-500">Orden: {state.order_num}</div>
                         </div>
-                        <div className="flex gap-2">
-                          <button className="btn text-sm" onClick={() => abrirEditarEstado(state)}>
-                            Editar
+                        <div className="flex gap-1">
+                          <button 
+                            className="p-2 hover:bg-gray-100 rounded-lg transition"
+                            onClick={() => abrirEditarEstado(state)}
+                            title="Edita el nombre de este estado."
+                          >
+                            <Edit2 size={14} className="text-gray-700" />
                           </button>
                           <button
-                            className="btn text-sm text-red-600"
+                            className="p-2 hover:bg-red-50 rounded-lg transition"
                             onClick={() => eliminarEstado(state.id, selectedMaterialForStates)}
+                            title="Elimina este estado. Los otros se renumerarán automáticamente."
                           >
-                            Eliminar
+                            <Trash2 size={14} className="text-red-600" />
                           </button>
                         </div>
                       </div>
@@ -1371,23 +1486,27 @@ export default function AdminCostosPage() {
             <CostsCard>
               <div className="flex flex-wrap gap-2">
                 {[
-                  { id: "entrada", label: "📥 Entrada Inicial", color: "bg-blue-50 border-blue-200" },
-                  { id: "transformacion", label: "🔄 Transformación", color: "bg-purple-50 border-purple-200" },
-                  { id: "merma", label: "⚠️ Merma Adicional", color: "bg-red-50 border-red-200" },
-                  { id: "produccion", label: "🏭 Producción", color: "bg-emerald-50 border-emerald-200" },
-                ].map((tipo) => (
-                  <button
-                    key={tipo.id}
-                    onClick={() => setTipoRegistro(tipo.id as any)}
-                    className={`px-4 py-2 rounded-2xl border font-semibold text-sm transition ${
-                      tipoRegistro === tipo.id
-                        ? `${tipo.color} border-current`
-                        : "bg-white border-gray-200 text-gray-600 hover:border-gray-300"
-                    }`}
-                  >
-                    {tipo.label}
-                  </button>
-                ))}
+                  { id: "entrada", label: "Entrada Inicial", icon: Download },
+                  { id: "transformacion", label: "Transformación", icon: ArrowRightLeft },
+                  { id: "merma", label: "Merma Adicional", icon: AlertTriangle },
+                  { id: "produccion", label: "Producción", icon: Zap },
+                ].map((tipo) => {
+                  const Icon = tipo.icon;
+                  return (
+                    <button
+                      key={tipo.id}
+                      onClick={() => setTipoRegistro(tipo.id as any)}
+                      className={`px-4 py-2 rounded-2xl border font-semibold text-sm transition inline-flex items-center gap-2 ${
+                        tipoRegistro === tipo.id
+                          ? "bg-blue-50 border-blue-300 text-blue-700"
+                          : "bg-white border-gray-200 text-gray-600 hover:border-gray-300"
+                      }`}
+                    >
+                      <Icon size={18} />
+                      {tipo.label}
+                    </button>
+                  );
+                })}
               </div>
             </CostsCard>
 
@@ -1662,103 +1781,194 @@ export default function AdminCostosPage() {
               </div>
             </div>
 
-            <div className="grid grid-cols-3 gap-6">
-              {/* LISTA DE FÓRMULAS */}
-              <div className="col-span-1">
+            {/* Búsqueda y filtros */}
+            <CostsCard>
+              <div className="space-y-3">
+                {/* Búsqueda */}
+                <div className="relative">
+                  <input
+                    type="text"
+                    placeholder="🔍 Buscar producto por nombre..."
+                    value={formulasSearchTerm}
+                    onChange={(e) => setFormulasSearchTerm(e.target.value)}
+                    className="w-full rounded-2xl border border-gray-300 px-4 py-2 text-sm focus:border-blue-500 focus:outline-none"
+                  />
+                  {formulasSearchTerm && (
+                    <button
+                      onClick={() => setFormulasSearchTerm("")}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
+
+                {/* Ordenamiento */}
+                <div className="flex gap-3">
+                  <select
+                    value={formulasOrderBy}
+                    onChange={(e) => setFormulasOrderBy(e.target.value as any)}
+                    className="flex-1 rounded-2xl border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+                  >
+                    <option value="name">Ordenar: A-Z</option>
+                    <option value="ingredients">Ordenar: Por ingredientes (más primero)</option>
+                    <option value="recent">Ordenar: Más recientes primero</option>
+                  </select>
+
+                  <button 
+                    className="btn btn-primary inline-flex items-center gap-2 flex-shrink-0"
+                    onClick={() => setShowCreateFormula(true)}
+                    title="Crea un nuevo producto o fórmula. Luego podrás agregarle ingredientes."
+                  >
+                    <Plus size={18} />
+                    Crear Producto
+                  </button>
+                </div>
+              </div>
+            </CostsCard>
+
+            {/* Grid de productos */}
+            {formulas.length === 0 ? (
+              <div className="rounded-2xl border-2 border-dashed border-gray-300 p-12 text-center bg-gray-50">
+                <ListChecks size={64} className="mx-auto mb-4 text-gray-300" strokeWidth={1.5} />
+                <h3 className="text-xl font-bold text-gray-900 mb-2">
+                  No hay productos registrados
+                </h3>
+                <p className="text-gray-600 mb-6 max-w-md mx-auto">
+                  Los productos son fórmulas que definen qué ingredientes necesitas.
+                  Pueden usar materias primas o incluso otros productos (anidados).
+                </p>
+                <button 
+                  className="btn btn-primary inline-flex items-center gap-2"
+                  onClick={() => setShowCreateFormula(true)}
+                >
+                  <Plus size={20} />
+                  Crear Primer Producto
+                </button>
+              </div>
+            ) : filteredAndSortedFormulas.length === 0 ? (
+              <div className="rounded-2xl border-2 border-dashed border-yellow-300 bg-yellow-50 p-8 text-center">
+                <p className="text-yellow-800 font-semibold mb-2">
+                  No se encontraron productos
+                </p>
+                <p className="text-sm text-yellow-700">
+                  No hay coincidencias para "{formulasSearchTerm}". Intenta con otro nombre.
+                </p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {filteredAndSortedFormulas.map((formula) => (
+                  <button
+                    key={formula.id}
+                    onClick={() => setSelectedFormula(formula)}
+                    className={`text-left rounded-2xl border-2 p-4 transition hover:shadow-md ${
+                      selectedFormula?.id === formula.id
+                        ? "border-blue-600 bg-blue-50 shadow-md"
+                        : "border-gray-200 bg-white hover:border-blue-300"
+                    }`}
+                  >
+                    {/* Encabezado */}
+                    <div className="flex items-start justify-between mb-2">
+                      <h3 className="font-bold text-gray-900 flex-1">{formula.name}</h3>
+                      <span className="text-xs font-semibold text-green-700 bg-green-50 px-2 py-1 rounded-lg ml-2">
+                        Activo
+                      </span>
+                    </div>
+
+                    {/* Descripción */}
+                    {formula.description && (
+                      <p className="text-xs text-gray-600 mb-3 line-clamp-2">
+                        {formula.description}
+                      </p>
+                    )}
+
+                    {/* Información */}
+                    <div className="grid grid-cols-2 gap-2 bg-gray-50 rounded-lg p-2 mb-3">
+                      <div>
+                        <span className="text-xs text-gray-500">Ingredientes</span>
+                        <p className="text-sm font-bold text-gray-900">
+                          {formula.ingredients.length}
+                        </p>
+                      </div>
+                      <div>
+                        <span className="text-xs text-gray-500">Unidad</span>
+                        <p className="text-sm font-bold text-gray-900">
+                          {formula.unit}
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Indicador de selección */}
+                    {selectedFormula?.id === formula.id && (
+                      <div className="text-xs text-blue-700 font-semibold">
+                        ✓ Seleccionado
+                      </div>
+                    )}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {/* DETALLES DE FÓRMULA SELECCIONADA */}
+            {selectedFormula && (
+              <div className="mt-8" ref={detallesRef}>
                 <CostsCard
-                  title="Fórmulas"
-                  subtitle={`${formulas.length} producto(s)`}
+                  title={selectedFormula.name}
+                  subtitle={selectedFormula.description || "Sin descripción"}
                   action={
-                    <button className="btn btn-primary" onClick={() => setShowCreateFormula(true)}>
-                      + Crear
+                    <button
+                      className="p-2 hover:bg-red-50 rounded-lg transition inline-flex items-center gap-2 text-red-600"
+                      onClick={() => eliminarFormula(selectedFormula.id)}
+                      title="Elimina este producto y todos sus ingredientes. Esta acción no se puede deshacer."
+                    >
+                      <Trash2 size={18} />
+                      Eliminar
                     </button>
                   }
                 >
-                  {formulas.length === 0 ? (
-                    <EmptyState
-                      icon="📋"
-                      title="Sin fórmulas"
-                      description="Crea tu primer producto para comenzar."
-                      action={
-                        <button className="btn btn-primary" onClick={() => setShowCreateFormula(true)}>
-                          + Crear fórmula
-                        </button>
-                      }
-                    />
-                  ) : (
-                    <div className="space-y-2">
-                      {formulas.map((formula) => (
-                        <button
-                          key={formula.id}
-                          onClick={() => setSelectedFormula(formula)}
-                          className={`w-full text-left rounded-2xl border p-3 transition ${
-                            selectedFormula?.id === formula.id
-                              ? "border-blue-600 bg-blue-50"
-                              : "border-gray-200 bg-white hover:border-gray-300"
-                          }`}
-                        >
-                          <div className="font-semibold text-gray-900">{formula.name}</div>
-                          <div className="text-xs text-gray-500 mt-1">
-                            {formula.ingredients.length} ingrediente(s)
+                  <div className="space-y-4">
+                    {/* Datos del producto */}
+                    <div className="bg-gray-50 rounded-2xl p-4 border border-gray-200">
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <div className="text-xs font-semibold text-gray-600 uppercase">Tipo</div>
+                          <div className="text-sm font-bold text-gray-900 mt-1">
+                            Producto
                           </div>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </CostsCard>
-              </div>
-
-              {/* DETALLES DE FÓRMULA SELECCIONADA */}
-              <div className="col-span-2">
-                {selectedFormula ? (
-                  <CostsCard
-                    title={selectedFormula.name}
-                    subtitle={selectedFormula.description || "Sin descripción"}
-                    action={
-                      <button
-                        className="btn text-sm text-red-600"
-                        onClick={() => eliminarFormula(selectedFormula.id)}
-                      >
-                        Eliminar
-                      </button>
-                    }
-                  >
-                    <div className="space-y-4">
-                      {/* Datos del producto */}
-                      <div className="bg-gray-50 rounded-2xl p-4 border border-gray-200">
-                        <div className="grid grid-cols-2 gap-4">
-                          <div>
-                            <div className="text-xs font-semibold text-gray-600 uppercase">Tipo</div>
-                            <div className="text-sm font-bold text-gray-900 mt-1">
-                              Producto
-                            </div>
-                          </div>
-                          <div>
-                            <div className="text-xs font-semibold text-gray-600 uppercase">Ingredientes</div>
-                            <div className="text-sm font-bold text-gray-900 mt-1">
-                              {selectedFormula.ingredients.length}
-                            </div>
+                        </div>
+                        <div>
+                          <div className="text-xs font-semibold text-gray-600 uppercase">Ingredientes</div>
+                          <div className="text-sm font-bold text-gray-900 mt-1">
+                            {selectedFormula.ingredients.length}
                           </div>
                         </div>
                       </div>
+                    </div>
 
-                      {/* Ingredientes */}
-                      <div>
-                        <div className="flex items-center justify-between mb-3">
-                          <h3 className="font-semibold text-gray-900">Ingredientes</h3>
-                          <button
-                            className="btn btn-primary text-sm"
-                            onClick={() => setShowAddIngredient(true)}
-                          >
-                            + Agregar
-                          </button>
+                    {/* Ingredientes */}
+                    <div>
+                      <div className="flex items-center justify-between mb-3">
+                        <h3 className="font-semibold text-gray-900">Ingredientes</h3>
+                        <button
+                          className="btn btn-primary text-sm inline-flex items-center gap-2"
+                          onClick={() => setShowAddIngredient(true)}
+                          title="Agrega un nuevo ingrediente (materia prima o producto anidado)."
+                        >
+                          <Plus size={16} />
+                          Agregar
+                        </button>
+                      </div>
+
+                      {selectedFormula.ingredients.length === 0 ? (
+                        <div className="bg-gray-50 rounded-2xl p-6 border-2 border-dashed border-gray-300 text-center">
+                          <p className="text-sm text-gray-600 mb-3">
+                            No hay ingredientes asignados.
+                          </p>
+                          <p className="text-xs text-gray-500">
+                            Presiona "+ Agregar" para definir qué necesitas para este producto.
+                          </p>
                         </div>
-
-                        {selectedFormula.ingredients.length === 0 ? (
-                          <div className="bg-gray-50 rounded-2xl p-4 border border-dashed border-gray-300 text-center">
-                            <p className="text-sm text-gray-500">Sin ingredientes definidos</p>
-                          </div>
-                        ) : (
+                      ) : (
                           <div className="space-y-2">
                             {selectedFormula.ingredients.map((ing) => (
                               <div
@@ -1797,28 +2007,22 @@ export default function AdminCostosPage() {
                       {/* Cuello de botella */}
                       {selectedFormula.ingredients.length > 0 && (
                         <button
-                          className="w-full bg-amber-50 border border-amber-200 rounded-2xl p-4 text-left hover:bg-amber-100 transition"
+                          className="w-full bg-gradient-to-br from-amber-50 to-orange-50 border border-amber-200 rounded-2xl p-4 text-left hover:shadow-md transition-all group"
                           onClick={abrirAnalisis}
                         >
-                          <div className="text-sm font-semibold text-amber-900 mb-2">📊 Calcular Análisis de Producción</div>
+                          <div className="flex items-center gap-2 text-sm font-semibold text-amber-900 mb-2">
+                            <TrendingDown size={20} className="text-amber-600 group-hover:scale-110 transition-transform" />
+                            Calcular Análisis de Producción
+                          </div>
                           <p className="text-xs text-amber-700">
-                            ¿Cuántos productos puedes hacer? ¿Qué ingrediente te limita? Haz clic para saber.
+                            Descubre cuántos productos puedes hacer con tu inventario actual y qué ingrediente te limita.
                           </p>
                         </button>
                       )}
                     </div>
                   </CostsCard>
-                ) : (
-                  <CostsCard>
-                    <EmptyState
-                      icon="📋"
-                      title="Selecciona una fórmula"
-                      description="Elige una fórmula de la lista para ver y editar sus ingredientes."
-                    />
-                  </CostsCard>
-                )}
-              </div>
-            </div>
+                </div>
+              )}
 
             {/* MODAL: ANÁLISIS DE PRODUCCIÓN */}
             <CostsModal
@@ -2100,20 +2304,34 @@ export default function AdminCostosPage() {
 
         {/* ────── TAB: REPORTES ────── */}
         {activeTab === "reportes" && (
-          <EmptyState
-            icon="📊"
-            title="Reportes"
-            description="Consulta gráficos de merma, rendimiento y costos de producción."
-          />
+          <div className="rounded-2xl border-2 border-dashed border-gray-300 p-16 text-center bg-gray-50">
+            <BarChart3 size={80} className="mx-auto mb-4 text-gray-300" strokeWidth={1.5} />
+            <h2 className="text-2xl font-bold text-gray-900 mb-3">
+              Reportes
+            </h2>
+            <p className="text-gray-600 mb-2 max-w-lg mx-auto">
+              Consulta gráficos de merma, rendimiento y costos de producción.
+            </p>
+            <p className="text-sm text-gray-500">
+              Funcionalidad en desarrollo
+            </p>
+          </div>
         )}
 
         {/* ────── TAB: ALERTAS ────── */}
         {activeTab === "alertas" && (
-          <EmptyState
-            icon="🔔"
-            title="Alertas"
-            description="Aquí aparecerán alertas de stock bajo, mermas anormales y variancies."
-          />
+          <div className="rounded-2xl border-2 border-dashed border-gray-300 p-16 text-center bg-gray-50">
+            <Bell size={80} className="mx-auto mb-4 text-gray-300" strokeWidth={1.5} />
+            <h2 className="text-2xl font-bold text-gray-900 mb-3">
+              Alertas
+            </h2>
+            <p className="text-gray-600 mb-2 max-w-lg mx-auto">
+              Aquí aparecerán alertas de stock bajo, mermas anormales y variancies.
+            </p>
+            <p className="text-sm text-gray-500">
+              Funcionalidad en desarrollo
+            </p>
+          </div>
         )}
       </PageShell>
 
