@@ -44,6 +44,26 @@ type RawMaterialInventory = {
   state_name?: string;
 };
 
+type FormulaIngredient = {
+  id: string;
+  product_id: string;
+  ingredient_id: string;
+  ingredient_type: "RAW_MATERIAL" | "PRODUCT";
+  quantity: number;
+  unit: string;
+  ingredient_name?: string;
+  ingredient_state_id?: string; // NUEVO - para seleccionar estado
+  ingredient_state_name?: string; // NUEVO - nombre del estado
+};
+
+type ProductFormula = {
+  id: string;
+  name: string;
+  unit: string;
+  description?: string;
+  ingredients: FormulaIngredient[];
+};
+
 export default function AdminCostosPage() {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
@@ -115,6 +135,31 @@ export default function AdminCostosPage() {
   const [produceObservations, setProduceObservations] = useState("");
   const [savingProduce, setSavingProduce] = useState(false);
   const [products, setProducts] = useState<Array<{ id: string; name: string }>>([]);
+
+  // FÓRMULAS
+  const [formulas, setFormulas] = useState<ProductFormula[]>([]);
+  const [selectedFormula, setSelectedFormula] = useState<ProductFormula | null>(null);
+  const [showCreateFormula, setShowCreateFormula] = useState(false);
+  const [showEditFormula, setShowEditFormula] = useState(false);
+  const [showAddIngredient, setShowAddIngredient] = useState(false);
+
+  // Crear nueva fórmula
+  const [newFormulaName, setNewFormulaName] = useState("");
+  const [newFormulaUnit, setNewFormulaUnit] = useState("u");
+  const [newFormulaDesc, setNewFormulaDesc] = useState("");
+  const [savingNewFormula, setSavingNewFormula] = useState(false);
+
+  // Agregar ingrediente
+  const [ingredientType, setIngredientType] = useState<"RAW_MATERIAL" | "PRODUCT">("RAW_MATERIAL");
+  const [selectedIngredient, setSelectedIngredient] = useState("");
+  const [selectedMaterialState, setSelectedMaterialState] = useState(""); // NUEVO: Estado de la materia prima
+  const [ingredientQty, setIngredientQty] = useState("");
+  const [savingIngredient, setSavingIngredient] = useState(false);
+
+  // ANÁLISIS DE PRODUCCIÓN
+  const [showAnalisisModal, setShowAnalisisModal] = useState(false);
+  const [analisisQty, setAnalisisQty] = useState("");
+  const [analisisResults, setAnalisisResults] = useState<any>(null);
 
   const TABS: { id: Tab; label: string; icon: string }[] = [
     { id: "materias-primas", label: "Materias Primas", icon: "📦" },
@@ -448,7 +493,7 @@ export default function AdminCostosPage() {
       const { data: types } = await supabase.from("waste_types").select("*").eq("is_active", true);
       setWasteTypes(types ?? []);
 
-      const { data: prods } = await supabase.from("products").select("id, name").eq("is_active", true);
+      const { data: prods } = await supabase.from("products").select("id, name");
       setProducts(prods ?? []);
     } catch (e) {
       console.error("Error cargando datos producción:", e);
@@ -462,6 +507,9 @@ export default function AdminCostosPage() {
     }
     if (activeTab === "produccion") {
       cargarDatosProduccion();
+    }
+    if (activeTab === "formulas") {
+      cargarFormulas();
     }
   }, [activeTab]);
 
@@ -682,6 +730,430 @@ export default function AdminCostosPage() {
       setErr(e.message ?? "Error registrando transformación.");
     } finally {
       setSavingTransform(false);
+    }
+  };
+
+  // ============================================================================
+  // FUNCIONES PARA FÓRMULAS
+  // ============================================================================
+
+  // Cargar todas las fórmulas
+  const cargarFormulas = async () => {
+    try {
+      const { data: productsData, error } = await supabase
+        .from("products")
+        .select("*")
+        .order("name");
+
+      if (error) throw new Error(error.message);
+
+      // Para cada producto, cargar sus ingredientes
+      const formulasData = await Promise.all(
+        (productsData ?? []).map(async (prod) => {
+          const { data: ingredients } = await supabase
+            .from("product_ingredients")
+            .select("*")
+            .eq("product_id", prod.id);
+
+          // Enriquecer ingredientes con nombres y estado
+          const enriched = await Promise.all(
+            (ingredients ?? []).map(async (ing) => {
+              let name = "";
+              let stateName = "";
+              
+              if (ing.ingredient_type === "RAW_MATERIAL") {
+                const { data: mat } = await supabase
+                  .from("raw_materials")
+                  .select("name")
+                  .eq("id", ing.ingredient_id)
+                  .single();
+                name = mat?.name ?? "Desconocido";
+
+                // Si tiene state_id, obtener el nombre del estado
+                if (ing.state_id) {
+                  const { data: state } = await supabase
+                    .from("raw_material_states")
+                    .select("name")
+                    .eq("id", ing.state_id)
+                    .single();
+                  stateName = state?.name ?? "";
+                }
+              } else {
+                const { data: prodIng } = await supabase
+                  .from("products")
+                  .select("name")
+                  .eq("id", ing.ingredient_id)
+                  .single();
+                name = prodIng?.name ?? "Desconocido";
+              }
+              return { 
+                ...ing, 
+                ingredient_name: name,
+                ingredient_state_id: ing.state_id,
+                ingredient_state_name: stateName,
+              };
+            })
+          );
+
+          return {
+            ...prod,
+            ingredients: enriched,
+          };
+        })
+      );
+
+      setFormulas(formulasData);
+    } catch (e: any) {
+      setErr(e.message ?? "Error cargando fórmulas.");
+    }
+  };
+
+  // Crear nueva fórmula
+  const crearFormula = async () => {
+    if (!newFormulaName.trim()) {
+      setErr("El nombre del producto es requerido.");
+      return;
+    }
+
+    setSavingNewFormula(true);
+    try {
+      const { data, error } = await supabase
+        .from("products")
+        .insert([
+          {
+            name: newFormulaName.trim(),
+            unit: newFormulaUnit,
+          },
+        ])
+        .select();
+
+      if (error) throw new Error(error.message);
+
+      setFormulas([
+        ...formulas,
+        {
+          id: data[0].id,
+          name: data[0].name,
+          unit: data[0].unit,
+          description: data[0].description,
+          ingredients: [],
+        },
+      ]);
+
+      setNewFormulaName("");
+      setNewFormulaUnit("u");
+      setNewFormulaDesc("");
+      setShowCreateFormula(false);
+      setErr(null);
+    } catch (e: any) {
+      setErr(e.message ?? "Error creando fórmula.");
+    } finally {
+      setSavingNewFormula(false);
+    }
+  };
+
+  // Agregar ingrediente
+  const agregarIngrediente = async () => {
+    if (!selectedFormula || !selectedIngredient || !ingredientQty) {
+      setErr("Selecciona ingrediente y cantidad.");
+      return;
+    }
+
+    // Si es materia prima, validar que haya estado seleccionado
+    if (ingredientType === "RAW_MATERIAL" && !selectedMaterialState) {
+      setErr("Selecciona el estado de la materia prima.");
+      return;
+    }
+
+    // Validar que no sea ingrediente duplicado (considerando el estado)
+    const ingredienteDuplicado = selectedFormula.ingredients.some(
+      (ing) => 
+        ing.ingredient_id === selectedIngredient && 
+        ing.ingredient_type === ingredientType &&
+        ing.ingredient_state_id === selectedMaterialState
+    );
+
+    if (ingredienteDuplicado) {
+      setErr("Este ingrediente en este estado ya está en la fórmula. Elimínalo primero si quieres agregarlo de nuevo.");
+      return;
+    }
+
+    const qty = parseFloat(ingredientQty);
+    if (isNaN(qty) || qty <= 0) {
+      setErr("Cantidad debe ser mayor a 0.");
+      return;
+    }
+
+    setSavingIngredient(true);
+    try {
+      let ingredientUnit = "";
+      if (ingredientType === "RAW_MATERIAL") {
+        const mat = materialesPrimas.find((m) => m.id === selectedIngredient);
+        ingredientUnit = mat?.unit ?? "u";
+      } else {
+        const prod = formulas.find((f) => f.id === selectedIngredient);
+        ingredientUnit = prod?.unit ?? "u";
+      }
+
+      const { data, error } = await supabase
+        .from("product_ingredients")
+        .insert([
+          {
+            product_id: selectedFormula.id,
+            ingredient_id: selectedIngredient,
+            ingredient_type: ingredientType,
+            quantity: qty,
+            unit: ingredientUnit,
+            state_id: ingredientType === "RAW_MATERIAL" ? selectedMaterialState : null,
+          },
+        ])
+        .select();
+
+      if (error) throw new Error(error.message);
+
+      let ingredientName = "";
+      let ingredientStateName = "";
+      
+      if (ingredientType === "RAW_MATERIAL") {
+        const mat = materialesPrimas.find((m) => m.id === selectedIngredient);
+        ingredientName = mat?.name ?? "Desconocido";
+        
+        // Obtener nombre del estado
+        const state = statesByMaterial[selectedIngredient]?.find((s) => s.id === selectedMaterialState);
+        ingredientStateName = state?.name ?? "";
+      } else {
+        const prod = formulas.find((f) => f.id === selectedIngredient);
+        ingredientName = prod?.name ?? "Desconocido";
+      }
+
+      const updatedFormula = {
+        ...selectedFormula,
+        ingredients: [
+          ...selectedFormula.ingredients,
+          {
+            ...data[0],
+            ingredient_name: ingredientName,
+            ingredient_state_id: selectedMaterialState,
+            ingredient_state_name: ingredientStateName,
+          },
+        ],
+      };
+
+      setSelectedFormula(updatedFormula);
+      setFormulas(
+        formulas.map((f) => (f.id === selectedFormula.id ? updatedFormula : f))
+      );
+
+      setIngredientType("RAW_MATERIAL");
+      setSelectedIngredient("");
+      setSelectedMaterialState("");
+      setIngredientQty("");
+      setShowAddIngredient(false);
+      await cargarFormulas();
+      setErr(null);
+    } catch (e: any) {
+      setErr(e.message ?? "Error agregando ingrediente.");
+    } finally {
+      setSavingIngredient(false);
+    }
+  };
+
+  // Eliminar ingrediente
+  const eliminarIngrediente = async (ingredientId: string) => {
+    if (!selectedFormula || !confirm("¿Eliminar este ingrediente?")) return;
+
+    try {
+      const { error } = await supabase
+        .from("product_ingredients")
+        .delete()
+        .eq("id", ingredientId);
+
+      if (error) throw new Error(error.message);
+
+      const updatedFormula = {
+        ...selectedFormula,
+        ingredients: selectedFormula.ingredients.filter((i) => i.id !== ingredientId),
+      };
+
+      setSelectedFormula(updatedFormula);
+      setFormulas(
+        formulas.map((f) => (f.id === selectedFormula.id ? updatedFormula : f))
+      );
+      setErr(null);
+    } catch (e: any) {
+      setErr(e.message ?? "Error eliminando ingrediente.");
+    }
+  };
+
+  // Eliminar fórmula
+  const eliminarFormula = async (id: string) => {
+    if (!confirm("¿Eliminar esta fórmula?")) return;
+
+    try {
+      const { error } = await supabase
+        .from("products")
+        .delete()
+        .eq("id", id);
+
+      if (error) throw new Error(error.message);
+
+      setFormulas(formulas.filter((f) => f.id !== id));
+      setSelectedFormula(null);
+      setErr(null);
+    } catch (e: any) {
+      setErr(e.message ?? "Error eliminando fórmula.");
+    }
+  };
+
+  // ============================================================================
+  // FUNCIÓN DE ANÁLISIS DE PRODUCCIÓN
+  // ============================================================================
+
+  type RequisitoDesglosado = {
+    material_id: string;
+    material_name: string;
+    material_type: "RAW_MATERIAL" | "PRODUCT";
+    quantity_needed: number;
+    unit: string;
+    stock_available: number;
+    can_make: number; // Cuántos productos puedes hacer con este ingrediente
+    es_cuello_botella: boolean;
+  };
+
+  // Función recursiva para calcular requisitos
+  const calcularRequisitosRecursivos = (
+    productId: string,
+    cantidad: number,
+    visitados = new Set<string>()
+  ): Map<string, RequisitoDesglosado> => {
+    const requisitos = new Map<string, RequisitoDesglosado>();
+
+    // Evitar loops infinitos
+    if (visitados.has(productId)) {
+      return requisitos;
+    }
+    visitados.add(productId);
+
+    // Obtener fórmula del producto
+    const formula = formulas.find((f) => f.id === productId);
+    if (!formula || formula.ingredients.length === 0) {
+      return requisitos;
+    }
+
+    // Para cada ingrediente
+    formula.ingredients.forEach((ing) => {
+      const cantidadNecesaria = ing.quantity * cantidad;
+
+      if (ing.ingredient_type === "RAW_MATERIAL") {
+        // Es materia prima - obtener stock FILTRANDO POR ESTADO
+        let stockDisponible = 0;
+        
+        if (ing.ingredient_state_id) {
+          // Si tiene estado específico, solo contar ese estado
+          stockDisponible = inventoryByMaterial[ing.ingredient_id]
+            ?.filter((inv) => inv.state_id === ing.ingredient_state_id)
+            ?.reduce((sum, inv) => sum + (inv.quantity || 0), 0) ?? 0;
+        } else {
+          // Si no tiene estado, sumar todos los estados
+          stockDisponible = inventoryByMaterial[ing.ingredient_id]?.reduce(
+            (sum, inv) => sum + (inv.quantity || 0),
+            0
+          ) ?? 0;
+        }
+
+        const key = `RAW_${ing.ingredient_id}_${ing.ingredient_state_id || "ALL"}`;
+        requisitos.set(key, {
+          material_id: ing.ingredient_id,
+          material_name: ing.ingredient_state_name 
+            ? `${ing.ingredient_name} (${ing.ingredient_state_name})`
+            : (ing.ingredient_name ?? "Desconocido"),
+          material_type: "RAW_MATERIAL",
+          quantity_needed: cantidadNecesaria,
+          unit: ing.unit,
+          stock_available: stockDisponible,
+          can_make: Math.floor(stockDisponible / cantidadNecesaria),
+          es_cuello_botella: false,
+        });
+      } else {
+        // Es producto - PRIMERO verificar su stock
+        const productFormula = formulas.find((f) => f.id === ing.ingredient_id);
+        
+        if (productFormula) {
+          // El producto existe - verificar si tiene stock como "producto" independiente
+          // (esto sería si se registrara como inventario de producto, lo cual no hacemos por ahora)
+          
+          // Por ahora, descender recursivamente a sus ingredientes
+          const subRequisitos = calcularRequisitosRecursivos(ing.ingredient_id, cantidadNecesaria, visitados);
+          subRequisitos.forEach((req, key) => {
+            if (requisitos.has(key)) {
+              // Sumar si ya existe
+              const existing = requisitos.get(key)!;
+              existing.quantity_needed += req.quantity_needed;
+              existing.can_make = Math.floor(existing.stock_available / existing.quantity_needed);
+            } else {
+              requisitos.set(key, req);
+            }
+          });
+        }
+      }
+    });
+
+    return requisitos;
+  };
+
+  // Abrir modal de análisis
+  const abrirAnalisis = () => {
+    setAnalisisQty("");
+    setAnalisisResults(null);
+    setShowAnalisisModal(true);
+  };
+
+  // Calcular análisis
+  const calcularAnalisis = async () => {
+    if (!selectedFormula || !analisisQty) {
+      setErr("Ingresa cantidad a producir.");
+      return;
+    }
+
+    const cantidad = parseFloat(analisisQty);
+    if (isNaN(cantidad) || cantidad <= 0) {
+      setErr("Cantidad debe ser mayor a 0.");
+      return;
+    }
+
+    try {
+      // Calcular requisitos POR UNIDAD (cantidad = 1)
+      const requisitosPorUnidad = calcularRequisitosRecursivos(selectedFormula.id, 1);
+
+      // Ahora multiplicar por la cantidad deseada
+      const requisitos = Array.from(requisitosPorUnidad.values()).map((req) => {
+        // Cantidad necesaria total
+        const cantidadNecesaria = req.quantity_needed * cantidad;
+        
+        // Cuántos productos puedo hacer con el stock disponible
+        const puedesHacer = Math.floor(req.stock_available / req.quantity_needed);
+        
+        return {
+          ...req,
+          quantity_needed: cantidadNecesaria,
+          can_make: puedesHacer, // Cuántos productos puedo hacer (no cuántos de la cantidad solicitada)
+        };
+      });
+
+      // Encontrar cuello de botella - el mínimo de lo que puedo hacer
+      const minCanMake = Math.min(...requisitos.map((r) => r.can_make));
+
+      requisitos.forEach((req) => {
+        req.es_cuello_botella = req.can_make === minCanMake;
+      });
+
+      setAnalisisResults({
+        cantidad_deseada: cantidad,
+        cantidad_posible: Math.min(minCanMake, cantidad), // No puedo hacer más que lo que pedí
+        requisitos: requisitos,
+      });
+    } catch (e: any) {
+      setErr(e.message ?? "Error en análisis.");
     }
   };
 
@@ -1169,11 +1641,461 @@ export default function AdminCostosPage() {
 
         {/* ────── TAB: FÓRMULAS ────── */}
         {activeTab === "formulas" && (
-          <EmptyState
-            icon="📋"
-            title="Fórmulas"
-            description="Define qué ingredientes necesita cada producto y sus cantidades."
-          />
+          <div className="space-y-6">
+            {/* Resumen rápido */}
+            <div className="grid gap-3 grid-cols-3">
+              <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-center text-emerald-700">
+                <div className="text-2xl font-black">{formulas.length}</div>
+                <div className="text-xs font-semibold mt-1">Productos/Fórmulas</div>
+              </div>
+              <div className="rounded-2xl border border-blue-200 bg-blue-50 p-4 text-center text-blue-700">
+                <div className="text-2xl font-black">
+                  {formulas.reduce((a, b) => a + b.ingredients.length, 0)}
+                </div>
+                <div className="text-xs font-semibold mt-1">Ingredientes Totales</div>
+              </div>
+              <div className="rounded-2xl border border-purple-200 bg-purple-50 p-4 text-center text-purple-700">
+                <div className="text-2xl font-black">
+                  {formulas.filter((f) => f.ingredients.length === 0).length}
+                </div>
+                <div className="text-xs font-semibold mt-1">Sin Ingredientes</div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-3 gap-6">
+              {/* LISTA DE FÓRMULAS */}
+              <div className="col-span-1">
+                <CostsCard
+                  title="Fórmulas"
+                  subtitle={`${formulas.length} producto(s)`}
+                  action={
+                    <button className="btn btn-primary" onClick={() => setShowCreateFormula(true)}>
+                      + Crear
+                    </button>
+                  }
+                >
+                  {formulas.length === 0 ? (
+                    <EmptyState
+                      icon="📋"
+                      title="Sin fórmulas"
+                      description="Crea tu primer producto para comenzar."
+                      action={
+                        <button className="btn btn-primary" onClick={() => setShowCreateFormula(true)}>
+                          + Crear fórmula
+                        </button>
+                      }
+                    />
+                  ) : (
+                    <div className="space-y-2">
+                      {formulas.map((formula) => (
+                        <button
+                          key={formula.id}
+                          onClick={() => setSelectedFormula(formula)}
+                          className={`w-full text-left rounded-2xl border p-3 transition ${
+                            selectedFormula?.id === formula.id
+                              ? "border-blue-600 bg-blue-50"
+                              : "border-gray-200 bg-white hover:border-gray-300"
+                          }`}
+                        >
+                          <div className="font-semibold text-gray-900">{formula.name}</div>
+                          <div className="text-xs text-gray-500 mt-1">
+                            {formula.ingredients.length} ingrediente(s)
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </CostsCard>
+              </div>
+
+              {/* DETALLES DE FÓRMULA SELECCIONADA */}
+              <div className="col-span-2">
+                {selectedFormula ? (
+                  <CostsCard
+                    title={selectedFormula.name}
+                    subtitle={selectedFormula.description || "Sin descripción"}
+                    action={
+                      <button
+                        className="btn text-sm text-red-600"
+                        onClick={() => eliminarFormula(selectedFormula.id)}
+                      >
+                        Eliminar
+                      </button>
+                    }
+                  >
+                    <div className="space-y-4">
+                      {/* Datos del producto */}
+                      <div className="bg-gray-50 rounded-2xl p-4 border border-gray-200">
+                        <div className="grid grid-cols-2 gap-4">
+                          <div>
+                            <div className="text-xs font-semibold text-gray-600 uppercase">Tipo</div>
+                            <div className="text-sm font-bold text-gray-900 mt-1">
+                              Producto
+                            </div>
+                          </div>
+                          <div>
+                            <div className="text-xs font-semibold text-gray-600 uppercase">Ingredientes</div>
+                            <div className="text-sm font-bold text-gray-900 mt-1">
+                              {selectedFormula.ingredients.length}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Ingredientes */}
+                      <div>
+                        <div className="flex items-center justify-between mb-3">
+                          <h3 className="font-semibold text-gray-900">Ingredientes</h3>
+                          <button
+                            className="btn btn-primary text-sm"
+                            onClick={() => setShowAddIngredient(true)}
+                          >
+                            + Agregar
+                          </button>
+                        </div>
+
+                        {selectedFormula.ingredients.length === 0 ? (
+                          <div className="bg-gray-50 rounded-2xl p-4 border border-dashed border-gray-300 text-center">
+                            <p className="text-sm text-gray-500">Sin ingredientes definidos</p>
+                          </div>
+                        ) : (
+                          <div className="space-y-2">
+                            {selectedFormula.ingredients.map((ing) => (
+                              <div
+                                key={ing.id}
+                                className="flex items-center justify-between p-3 bg-white rounded-2xl border border-gray-200"
+                              >
+                                <div>
+                                  <div className="font-semibold text-gray-900">
+                                    {ing.ingredient_name}
+                                    {ing.ingredient_state_name && (
+                                      <span className="text-gray-500 font-normal"> ({ing.ingredient_state_name})</span>
+                                    )}
+                                  </div>
+                                  <div className="text-xs text-gray-500 mt-1">
+                                    {ing.quantity} {ing.unit}
+                                    <span className="mx-1">•</span>
+                                    <Badge
+                                      label={ing.ingredient_type === "RAW_MATERIAL" ? "Materia Prima" : "Producto"}
+                                      color={ing.ingredient_type === "RAW_MATERIAL" ? "blue" : "purple"}
+                                      size="sm"
+                                    />
+                                  </div>
+                                </div>
+                                <button
+                                  className="btn text-sm text-red-600"
+                                  onClick={() => eliminarIngrediente(ing.id)}
+                                >
+                                  ✕
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Cuello de botella */}
+                      {selectedFormula.ingredients.length > 0 && (
+                        <button
+                          className="w-full bg-amber-50 border border-amber-200 rounded-2xl p-4 text-left hover:bg-amber-100 transition"
+                          onClick={abrirAnalisis}
+                        >
+                          <div className="text-sm font-semibold text-amber-900 mb-2">📊 Calcular Análisis de Producción</div>
+                          <p className="text-xs text-amber-700">
+                            ¿Cuántos productos puedes hacer? ¿Qué ingrediente te limita? Haz clic para saber.
+                          </p>
+                        </button>
+                      )}
+                    </div>
+                  </CostsCard>
+                ) : (
+                  <CostsCard>
+                    <EmptyState
+                      icon="📋"
+                      title="Selecciona una fórmula"
+                      description="Elige una fórmula de la lista para ver y editar sus ingredientes."
+                    />
+                  </CostsCard>
+                )}
+              </div>
+            </div>
+
+            {/* MODAL: ANÁLISIS DE PRODUCCIÓN */}
+            <CostsModal
+              isOpen={showAnalisisModal}
+              title={`Análisis: ${selectedFormula?.name}`}
+              onClose={() => {
+                setShowAnalisisModal(false);
+                setAnalisisQty("");
+                setAnalisisResults(null);
+              }}
+              actions={
+                !analisisResults
+                  ? [
+                      {
+                        label: "Cancelar",
+                        onClick: () => {
+                          setShowAnalisisModal(false);
+                          setAnalisisQty("");
+                        },
+                        variant: "secondary",
+                      },
+                      {
+                        label: "Calcular",
+                        onClick: calcularAnalisis,
+                        variant: "primary",
+                        disabled: !analisisQty,
+                      },
+                    ]
+                  : [
+                      {
+                        label: "Nueva búsqueda",
+                        onClick: () => {
+                          setAnalisisQty("");
+                          setAnalisisResults(null);
+                        },
+                        variant: "secondary",
+                      },
+                    ]
+              }
+            >
+              {!analisisResults ? (
+                <div className="space-y-4">
+                  <FormInput
+                    label="¿Cuántos productos quieres producir?"
+                    value={analisisQty}
+                    onChange={setAnalisisQty}
+                    type="number"
+                    placeholder="100"
+                  />
+                  <div className="bg-blue-50 border border-blue-200 rounded-2xl p-3">
+                    <p className="text-xs text-blue-700">
+                      Ingresa la cantidad y te mostraré cuántos puedes hacer realmente basado en tu stock actual.
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {/* Resumen */}
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="bg-blue-50 rounded-2xl p-3 text-center border border-blue-200">
+                      <div className="text-xs text-blue-600 font-semibold">Quieres hacer</div>
+                      <div className="text-2xl font-black text-blue-700">{analisisResults.cantidad_deseada}</div>
+                    </div>
+                    <div
+                      className={`rounded-2xl p-3 text-center border font-semibold ${
+                        analisisResults.cantidad_posible === analisisResults.cantidad_deseada
+                          ? "bg-emerald-50 border-emerald-200"
+                          : "bg-red-50 border-red-200"
+                      }`}
+                    >
+                      <div className={`text-xs ${analisisResults.cantidad_posible === analisisResults.cantidad_deseada ? "text-emerald-600" : "text-red-600"}`}>
+                        Puedes hacer
+                      </div>
+                      <div className={`text-2xl font-black ${analisisResults.cantidad_posible === analisisResults.cantidad_deseada ? "text-emerald-700" : "text-red-700"}`}>
+                        {analisisResults.cantidad_posible}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Tabla de requisitos */}
+                  <div className="border-t border-gray-200 pt-3">
+                    <div className="text-sm font-semibold text-gray-900 mb-2">Ingredientes Necesarios</div>
+                    <div className="space-y-2 max-h-80 overflow-y-auto">
+                      {analisisResults.requisitos.map((req: RequisitoDesglosado, idx: number) => (
+                        <div
+                          key={idx}
+                          className={`rounded-lg p-3 border ${
+                            req.es_cuello_botella
+                              ? "bg-red-50 border-red-300"
+                              : req.stock_available >= req.quantity_needed
+                                ? "bg-emerald-50 border-emerald-200"
+                                : "bg-amber-50 border-amber-200"
+                          }`}
+                        >
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <div className="font-semibold text-gray-900">{req.material_name}</div>
+                              <div className="text-xs text-gray-500">
+                                {req.material_type === "RAW_MATERIAL" ? "Materia Prima" : "Producto"}
+                              </div>
+                            </div>
+                            <div className="text-right">
+                              <div className="font-bold text-gray-900">
+                                {req.quantity_needed.toFixed(2)} {req.unit}
+                              </div>
+                              <div className={`text-xs font-semibold ${
+                                req.stock_available >= req.quantity_needed ? "text-emerald-700" : "text-red-700"
+                              }`}>
+                                (Stock: {req.stock_available.toFixed(2)})
+                              </div>
+                            </div>
+                          </div>
+
+                          {req.es_cuello_botella && (
+                            <div className="mt-2 text-xs bg-red-100 text-red-700 rounded px-2 py-1 font-semibold">
+                              ⚠️ CUELLO DE BOTELLA - Te limita a {req.can_make} productos
+                            </div>
+                          )}
+
+                          {req.stock_available < req.quantity_needed && !req.es_cuello_botella && (
+                            <div className="mt-2 text-xs bg-amber-100 text-amber-700 rounded px-2 py-1 font-semibold">
+                              ❌ Faltante: {(req.quantity_needed - req.stock_available).toFixed(2)} {req.unit}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Recomendación */}
+                  {analisisResults.cantidad_posible < analisisResults.cantidad_deseada && (
+                    <div className="bg-amber-50 border border-amber-300 rounded-2xl p-3">
+                      <div className="text-sm font-semibold text-amber-900">💡 Recomendación</div>
+                      <div className="text-xs text-amber-700 mt-1">
+                        Primero produce más {analisisResults.requisitos.find((r: RequisitoDesglosado) => r.es_cuello_botella)?.material_name}
+                        , o reduce la cantidad a {analisisResults.cantidad_posible} productos.
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </CostsModal>
+
+            {/* MODAL: Crear Fórmula */}
+            <CostsModal
+              isOpen={showCreateFormula}
+              title="Crear Fórmula (Producto)"
+              onClose={() => {
+                setShowCreateFormula(false);
+                setNewFormulaName("");
+                setNewFormulaUnit("u");
+                setNewFormulaDesc("");
+              }}
+              actions={[
+                {
+                  label: "Cancelar",
+                  onClick: () => {
+                    setShowCreateFormula(false);
+                    setNewFormulaName("");
+                    setNewFormulaUnit("u");
+                    setNewFormulaDesc("");
+                  },
+                  variant: "secondary",
+                },
+                {
+                  label: savingNewFormula ? "Creando..." : "Crear",
+                  onClick: crearFormula,
+                  variant: "primary",
+                  disabled: savingNewFormula,
+                },
+              ]}
+            >
+              <FormInput
+                label="Nombre del Producto"
+                value={newFormulaName}
+                onChange={setNewFormulaName}
+                placeholder="Ej: Empanada de carne"
+                disabled={savingNewFormula}
+              />
+              <FormSelect
+                label="Unidad de Medida"
+                value={newFormulaUnit}
+                onChange={setNewFormulaUnit}
+                options={[
+                  { value: "u", label: "Unidades (u)" },
+                  { value: "kg", label: "Kilogramos (kg)" },
+                  { value: "g", label: "Gramos (g)" },
+                  { value: "l", label: "Litros (l)" },
+                  { value: "ml", label: "Mililitros (ml)" },
+                ]}
+                disabled={savingNewFormula}
+              />
+            </CostsModal>
+
+            {/* MODAL: Agregar Ingrediente */}
+            <CostsModal
+              isOpen={showAddIngredient}
+              title={`Agregar Ingrediente a ${selectedFormula?.name}`}
+              onClose={() => {
+                setShowAddIngredient(false);
+                setIngredientType("RAW_MATERIAL");
+                setSelectedIngredient("");
+                setIngredientQty("");
+              }}
+              actions={[
+                {
+                  label: "Cancelar",
+                  onClick: () => {
+                    setShowAddIngredient(false);
+                    setIngredientType("RAW_MATERIAL");
+                    setSelectedIngredient("");
+                    setIngredientQty("");
+                  },
+                  variant: "secondary",
+                },
+                {
+                  label: savingIngredient ? "Agregando..." : "Agregar",
+                  onClick: agregarIngrediente,
+                  variant: "primary",
+                  disabled: savingIngredient,
+                },
+              ]}
+            >
+              <FormSelect
+                label="Tipo de Ingrediente"
+                value={ingredientType}
+                onChange={(val) => {
+                  setIngredientType(val as any);
+                  setSelectedIngredient("");
+                }}
+                options={[
+                  { value: "RAW_MATERIAL", label: "Materia Prima" },
+                  { value: "PRODUCT", label: "Producto (anidado)" },
+                ]}
+                disabled={savingIngredient}
+              />
+
+              <FormSelect
+                label={ingredientType === "RAW_MATERIAL" ? "Materia Prima" : "Producto"}
+                value={selectedIngredient}
+                onChange={setSelectedIngredient}
+                options={
+                  ingredientType === "RAW_MATERIAL"
+                    ? materialesPrimas.map((m) => ({ value: m.id, label: m.name }))
+                    : formulas
+                        .filter((f) => f.id !== selectedFormula?.id)
+                        .map((f) => ({ value: f.id, label: f.name }))
+                }
+                disabled={savingIngredient}
+              />
+
+              {/* Dropdown de Estados - Solo si es Materia Prima */}
+              {ingredientType === "RAW_MATERIAL" && selectedIngredient && (
+                <FormSelect
+                  label="Estado de la Materia Prima"
+                  value={selectedMaterialState}
+                  onChange={setSelectedMaterialState}
+                  options={
+                    statesByMaterial[selectedIngredient]?.map((state) => ({
+                      value: state.id,
+                      label: state.name,
+                    })) || []
+                  }
+                  disabled={savingIngredient}
+                />
+              )}
+
+              <FormInput
+                label="Cantidad Necesaria"
+                value={ingredientQty}
+                onChange={setIngredientQty}
+                type="number"
+                placeholder="0"
+                disabled={savingIngredient}
+              />
+            </CostsModal>
+          </div>
         )}
 
         {/* ────── TAB: REPORTES ────── */}
