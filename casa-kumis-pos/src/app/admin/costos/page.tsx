@@ -172,6 +172,26 @@ export default function AdminCostosPage() {
   const [showDuplicateModal, setShowDuplicateModal] = useState(false);
   const [savingDuplicate, setSavingDuplicate] = useState(false);
 
+  // REPORTES
+  const [reportesTab, setReportesTab] = useState<"resumen" | "merma" | "produccion">("resumen");
+  const [dataMerma, setDataMerma] = useState<any[]>([]);
+  const [dataProduccion, setDataProduccion] = useState<any[]>([]);
+  const [loadingReportes, setLoadingReportes] = useState(false);
+
+  // ALERTAS
+  const [alertas, setAlertas] = useState<any[]>([]);
+  const [alertasNoLeidas, setAlertasNoLeidas] = useState(0);
+  const [filtroAlertas, setFiltroAlertas] = useState<"todas" | "red" | "yellow">("todas");
+  const [loadingAlertas, setLoadingAlertas] = useState(false);
+
+  // BÚSQUEDA E HISTORIAL
+  const [materialesSearchTerm, setMaterialesSearchTerm] = useState("");
+  const [historialMateria, setHistorialMateria] = useState<any[]>([]);
+  const [historialFormula, setHistorialFormula] = useState<any[]>([]);
+  const [loadingHistorial, setLoadingHistorial] = useState(false);
+  const [mostrarHistorialMateria, setMostrarHistorialMateria] = useState(false);
+  const [mostrarHistorialFormula, setMostrarHistorialFormula] = useState(false);
+
   // Crear nueva fórmula
   const [newFormulaName, setNewFormulaName] = useState("");
   const [newFormulaUnit, setNewFormulaUnit] = useState("u");
@@ -214,7 +234,16 @@ export default function AdminCostosPage() {
       case "reportes":
         return <BarChart3 size={18} className="inline mr-2" />;
       case "alertas":
-        return <Bell size={18} className="inline mr-2" />;
+        return (
+          <div className="inline-flex items-center gap-2">
+            <Bell size={18} />
+            {alertasNoLeidas > 0 && (
+              <span className="bg-red-500 text-white text-xs px-1.5 py-0.5 rounded-full font-bold">
+                {alertasNoLeidas}
+              </span>
+            )}
+          </div>
+        );
       default:
         return null;
     }
@@ -253,6 +282,7 @@ export default function AdminCostosPage() {
       if (!role.ok) return router.replace("/admin");
 
       await cargarMaterialesPrimas();
+      await obtenerAlertas();
       setLoading(false);
     };
     run().catch((e: any) => {
@@ -838,6 +868,10 @@ export default function AdminCostosPage() {
       const session = await supabase.auth.getSession();
       const userId = session.data.session?.user.id;
 
+      // Obtener unidad de la materia prima TEMPRANO
+      const materialObj = materialesPrimas.find((m) => m.id === transformMaterial);
+      const unit = materialObj?.unit || "unidades";
+
       // Registrar batch de merma adicional
       const { data: batchData, error: batchError } = await supabase
         .from("raw_material_batches")
@@ -884,11 +918,21 @@ export default function AdminCostosPage() {
             related_id: batchData?.[0]?.id,
           },
         ]);
-      }
 
-      // Obtener unidad de la materia prima
-      const materialObj = materialesPrimas.find((m) => m.id === transformMaterial);
-      const unit = materialObj?.unit || "unidades";
+        // Verificar si la merma es anormal (> 10%)
+        const stockAnterior = inventoryData[0].quantity || 0;
+        const porcentajeMerma = stockAnterior > 0 ? (qty / stockAnterior) * 100 : 0;
+        
+        if (porcentajeMerma > 10) {
+          await crearAlerta(
+            "merma_anormal",
+            "red",
+            `Merma anormal en ${materialObj?.name}: ${porcentajeMerma.toFixed(1)}%`,
+            transformMaterial,
+            "raw_material"
+          );
+        }
+      }
 
       // Mensaje de éxito con unidad correcta
       setErr(null);
@@ -954,6 +998,22 @@ export default function AdminCostosPage() {
               reason: "Producción",
             },
           ]);
+
+          // Verificar si stock quedó bajo (< 20% del promedio teórico)
+          // Promedio teórico = 30 unidades (ajustable)
+          const promedioTeorico = 30;
+          const umbralBajo = (promedioTeorico * 20) / 100;
+          
+          if (newQty > 0 && newQty < umbralBajo) {
+            const mat = materialesPrimas.find((m) => m.id === ingredient.ingredient_id);
+            await crearAlerta(
+              "stock_bajo",
+              "yellow",
+              `Stock bajo en ${mat?.name}: ${newQty} ${mat?.unit}`,
+              ingredient.ingredient_id,
+              "raw_material"
+            );
+          }
         }
       } else if (ingredient.ingredient_type === "PRODUCT") {
         // Es un producto - descontar recursivamente sus ingredientes
@@ -1132,7 +1192,270 @@ export default function AdminCostosPage() {
     }
   };
 
-  // Crear nueva fórmula
+  // Cargar datos para reportes
+  const cargarReportes = async () => {
+    setLoadingReportes(true);
+    try {
+      // Primero asegurarse que formulas está cargado
+      if (formulas.length === 0) {
+        await cargarFormulas();
+      }
+
+      // Cargar merma
+      const { data: mermaData } = await supabase
+        .from("raw_material_inventory_audit_logs")
+        .select(`
+          id,
+          created_at,
+          quantity_before,
+          quantity_after,
+          reason,
+          raw_material_id,
+          state_id
+        `)
+        .eq("reason", "Merma Adicional")
+        .order("created_at", { ascending: false });
+
+      if (mermaData) {
+        // Enriquecer con nombres
+        const enrichedMerma = await Promise.all(
+          (mermaData || []).map(async (item: any) => {
+            const mat = materialesPrimas.find((m) => m.id === item.raw_material_id);
+            const state = statesByMaterial[item.raw_material_id]?.find(
+              (s: any) => s.id === item.state_id
+            );
+            return {
+              ...item,
+              material_name: mat?.name ?? "Desconocido",
+              state_name: state?.name ?? "Desconocido",
+              unit: mat?.unit ?? "u",
+              cantidad_merma: item.quantity_before - item.quantity_after,
+            };
+          })
+        );
+        setDataMerma(enrichedMerma);
+      }
+
+      // Cargar producción - obtener productos actualizados
+      const { data: productsData } = await supabase
+        .from("products")
+        .select("id, name");
+
+      // Obtener ingredientes para cada producto
+      if (productsData) {
+        const prodMap: Record<string, any> = {};
+        for (const prod of productsData) {
+          const { data: ingredients } = await supabase
+            .from("product_ingredients")
+            .select("*")
+            .eq("product_id", prod.id);
+
+          prodMap[prod.id] = {
+            product_id: prod.id,
+            product_name: prod.name,
+            total_ingredientes: ingredients?.length || 0,
+          };
+        }
+        setDataProduccion(Object.values(prodMap));
+      }
+    } catch (e: any) {
+      console.error("Error cargando reportes:", e);
+    } finally {
+      setLoadingReportes(false);
+    }
+  };
+
+  // Crear alerta
+  const crearAlerta = async (
+    type: string,
+    severity: "red" | "yellow",
+    message: string,
+    relatedId: string,
+    relatedType: "raw_material" | "product"
+  ) => {
+    try {
+      // Verificar si ya existe una alerta similar del mismo día
+      const hoy = new Date().toISOString().split("T")[0];
+      const { data: existentes, error: checkError } = await supabase
+        .from("alerts")
+        .select("id")
+        .eq("type", type)
+        .eq("related_id", relatedId)
+        .gte("created_at", `${hoy}T00:00:00`)
+        .lte("created_at", `${hoy}T23:59:59`);
+
+      if (checkError) {
+        // Si tabla no existe, ignorar
+        console.warn("Tabla alerts no existe. Por favor crea la tabla con SQL.");
+        return;
+      }
+
+      if (existentes && existentes.length > 0) {
+        return; // No crear duplicada
+      }
+
+      const { error: insertError } = await supabase.from("alerts").insert([
+        {
+          type,
+          severity,
+          message,
+          related_id: relatedId,
+          related_type: relatedType,
+          is_read: false,
+        },
+      ]);
+
+      if (insertError) {
+        console.warn("Error creando alerta:", insertError);
+        return;
+      }
+
+      // Recargar alertas
+      await obtenerAlertas();
+    } catch (e: any) {
+      console.error("Error en crearAlerta:", e);
+    }
+  };
+
+  // Obtener alertas
+  const obtenerAlertas = async () => {
+    setLoadingAlertas(true);
+    try {
+      const { data: alertasData, error } = await supabase
+        .from("alerts")
+        .select("*")
+        .order("created_at", { ascending: false });
+
+      if (error) {
+        // Si la tabla no existe, ignorar error pero avisar en consola
+        console.warn("Tabla de alertas no existe aún. Crea la tabla con SQL primero.");
+        setAlertas([]);
+        setAlertasNoLeidas(0);
+        return;
+      }
+
+      setAlertas(alertasData || []);
+
+      // Contar no leídas
+      const noLeidas = (alertasData || []).filter((a: any) => !a.is_read).length;
+      setAlertasNoLeidas(noLeidas);
+    } catch (e: any) {
+      console.error("Error obteniendo alertas:", e);
+      setAlertas([]);
+      setAlertasNoLeidas(0);
+    } finally {
+      setLoadingAlertas(false);
+    }
+  };
+
+  // Marcar alerta como leída
+  const marcarAlertaLeida = async (alertId: string) => {
+    try {
+      const { error } = await supabase
+        .from("alerts")
+        .update({ is_read: true })
+        .eq("id", alertId);
+
+      if (error) {
+        console.warn("Error marcando alerta leída:", error);
+        return;
+      }
+
+      await obtenerAlertas();
+    } catch (e: any) {
+      console.error("Error marcando alerta leída:", e);
+    }
+  };
+
+  // Eliminar alerta
+  const eliminarAlerta = async (alertId: string) => {
+    try {
+      const { error } = await supabase.from("alerts").delete().eq("id", alertId);
+
+      if (error) {
+        console.warn("Error eliminando alerta:", error);
+        return;
+      }
+
+      await obtenerAlertas();
+    } catch (e: any) {
+      console.error("Error eliminando alerta:", e);
+    }
+  };
+
+  // Obtener historial de movimientos de una materia prima
+  const obtenerHistorialMateria = async (materialId: string) => {
+    setLoadingHistorial(true);
+    try {
+      const { data: historialData } = await supabase
+        .from("raw_material_inventory_audit_logs")
+        .select("*")
+        .eq("raw_material_id", materialId)
+        .order("created_at", { ascending: false })
+        .limit(50);
+
+      setHistorialMateria(historialData || []);
+      setMostrarHistorialMateria(true);
+    } catch (e: any) {
+      console.error("Error obteniendo historial materia:", e);
+    } finally {
+      setLoadingHistorial(false);
+    }
+  };
+
+  // Obtener historial de cambios de una fórmula
+  const obtenerHistorialFormula = async (productId: string) => {
+    setLoadingHistorial(true);
+    try {
+      const { data: historialData, error } = await supabase
+        .from("product_changes_log")
+        .select("*")
+        .eq("product_id", productId)
+        .order("created_at", { ascending: false })
+        .limit(50);
+
+      if (error) {
+        console.warn("Tabla product_changes_log no existe aún");
+        setHistorialFormula([]);
+        return;
+      }
+
+      setHistorialFormula(historialData || []);
+      setMostrarHistorialFormula(true);
+    } catch (e: any) {
+      console.error("Error obteniendo historial fórmula:", e);
+    } finally {
+      setLoadingHistorial(false);
+    }
+  };
+
+  // Registrar cambio en fórmula
+  const registrarCambioFormula = async (
+    productId: string,
+    changeType: string,
+    changeDetail: string
+  ) => {
+    try {
+      const session = await supabase.auth.getSession();
+      const userId = session.data.session?.user.id;
+
+      const { error } = await supabase.from("product_changes_log").insert([
+        {
+          product_id: productId,
+          change_type: changeType,
+          change_detail: changeDetail,
+          created_by: userId,
+        },
+      ]);
+
+      if (error) {
+        console.warn("Error registrando cambio de fórmula:", error);
+        // No lanzar error, la tabla podría no existir aún
+      }
+    } catch (e: any) {
+      console.error("Error en registrarCambioFormula:", e);
+    }
+  };
   const crearFormula = async () => {
     if (!newFormulaName.trim()) {
       setErr("El nombre del producto es requerido.");
@@ -1163,6 +1486,13 @@ export default function AdminCostosPage() {
           ingredients: [],
         },
       ]);
+
+      // Registrar en historial
+      await registrarCambioFormula(
+        data[0].id,
+        "created",
+        `Fórmula creada: ${newFormulaName.trim()}`
+      );
 
       setNewFormulaName("");
       setNewFormulaUnit("u");
@@ -1273,6 +1603,14 @@ export default function AdminCostosPage() {
       setSelectedMaterialState("");
       setIngredientQty("");
       setShowAddIngredient(false);
+      
+      // Registrar en historial
+      await registrarCambioFormula(
+        selectedFormula.id,
+        "ingredient_added",
+        `Ingrediente agregado: ${ingredientName} (${qty} ${ingredientUnit})`
+      );
+      
       await cargarFormulas();
       setErr(null);
     } catch (e: any) {
@@ -1287,6 +1625,11 @@ export default function AdminCostosPage() {
     if (!selectedFormula || !confirm("¿Eliminar este ingrediente?")) return;
 
     try {
+      // Obtener nombre del ingrediente antes de eliminar
+      const ingredAEliminar = selectedFormula.ingredients.find(
+        (i) => i.id === ingredientId
+      );
+
       const { error } = await supabase
         .from("product_ingredients")
         .delete()
@@ -1303,6 +1646,14 @@ export default function AdminCostosPage() {
       setFormulas(
         formulas.map((f) => (f.id === selectedFormula.id ? updatedFormula : f))
       );
+
+      // Registrar en historial
+      await registrarCambioFormula(
+        selectedFormula.id,
+        "ingredient_removed",
+        `Ingrediente eliminado: ${ingredAEliminar?.ingredient_name}`
+      );
+
       setErr(null);
     } catch (e: any) {
       setErr(e.message ?? "Error eliminando ingrediente.");
@@ -1344,6 +1695,11 @@ export default function AdminCostosPage() {
 
     setSavingEditIngredient(true);
     try {
+      // Obtener datos del ingrediente antes de actualizar
+      const ingredActual = selectedFormula.ingredients.find(
+        (i) => i.id === editingIngredientId
+      );
+
       const { error } = await supabase
         .from("product_ingredients")
         .update({ quantity: newQty })
@@ -1364,6 +1720,13 @@ export default function AdminCostosPage() {
       setSelectedFormula(updatedFormula);
       setFormulas(
         formulas.map((f) => (f.id === selectedFormula.id ? updatedFormula : f))
+      );
+
+      // Registrar en historial
+      await registrarCambioFormula(
+        selectedFormula.id,
+        "ingredient_modified",
+        `${ingredActual?.ingredient_name}: ${ingredActual?.quantity} ${ingredActual?.unit} → ${newQty} ${ingredActual?.unit}`
       );
 
       setErr(null);
@@ -1683,6 +2046,17 @@ export default function AdminCostosPage() {
                 </button>
               }
             >
+              {/* Input de búsqueda */}
+              <div className="mb-4">
+                <input
+                  type="text"
+                  placeholder="🔍 Buscar materia prima o estado..."
+                  value={materialesSearchTerm}
+                  onChange={(e) => setMaterialesSearchTerm(e.target.value)}
+                  className="w-full px-4 py-2 rounded-lg border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+
               {materialesPrimas.length === 0 ? (
                 <div className="rounded-2xl border-2 border-dashed border-gray-300 p-12 text-center bg-gray-50">
                   <Package size={64} className="mx-auto mb-4 text-gray-300" strokeWidth={1.5} />
@@ -1703,7 +2077,16 @@ export default function AdminCostosPage() {
                 </div>
               ) : (
                 <div className="space-y-2">
-                  {materialesPrimas.map((mat) => (
+                  {materialesPrimas
+                    .filter((mat) => {
+                      const searchLower = materialesSearchTerm.toLowerCase();
+                      const matchName = mat.name.toLowerCase().includes(searchLower);
+                      const matchState = (statesByMaterial[mat.id] || []).some((s: any) =>
+                        s.name.toLowerCase().includes(searchLower)
+                      );
+                      return matchName || matchState;
+                    })
+                    .map((mat) => (
                     <div key={mat.id} className="rounded-2xl border border-gray-200 p-4">
                       <div className="flex items-start justify-between gap-4 mb-3">
                         <div>
@@ -1712,6 +2095,13 @@ export default function AdminCostosPage() {
                         </div>
                         <div className="flex items-center gap-2">
                           <Badge label={mat.unit} color="blue" size="sm" />
+                          <button
+                            className="p-2 hover:bg-blue-50 rounded-lg transition"
+                            onClick={() => obtenerHistorialMateria(mat.id)}
+                            title="Ver historial de movimientos de esta materia prima."
+                          >
+                            📜
+                          </button>
                           <button
                             className="p-2 hover:bg-gray-100 rounded-lg transition"
                             onClick={() => abrirEditarMaterial(mat)}
@@ -2296,6 +2686,14 @@ export default function AdminCostosPage() {
                     <div className="flex gap-2">
                       <button
                         className="p-2 hover:bg-blue-50 rounded-lg transition inline-flex items-center gap-2 text-blue-600"
+                        onClick={() => obtenerHistorialFormula(selectedFormula.id)}
+                        title="Ver historial de cambios en esta fórmula."
+                      >
+                        📜
+                        Historial
+                      </button>
+                      <button
+                        className="p-2 hover:bg-blue-50 rounded-lg transition inline-flex items-center gap-2 text-blue-600"
                         onClick={() => {
                           setDuplicatingProductId(selectedFormula.id);
                           setDuplicatingProductName(`${selectedFormula.name} (copia)`);
@@ -2763,35 +3161,439 @@ export default function AdminCostosPage() {
           </div>
         </CostsModal>
 
+        {/* MODAL: Historial de Materia Prima */}
+        <CostsModal
+          isOpen={mostrarHistorialMateria}
+          title="Historial de Movimientos"
+          onClose={() => {
+            setMostrarHistorialMateria(false);
+            setHistorialMateria([]);
+          }}
+        >
+          <div className="space-y-4">
+            {loadingHistorial ? (
+              <p className="text-gray-500">Cargando historial...</p>
+            ) : historialMateria.length === 0 ? (
+              <p className="text-gray-500 text-center py-4">No hay movimientos registrados</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="px-3 py-2 text-left font-semibold">Fecha</th>
+                      <th className="px-3 py-2 text-left font-semibold">Tipo</th>
+                      <th className="px-3 py-2 text-right font-semibold">Antes</th>
+                      <th className="px-3 py-2 text-right font-semibold">Después</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {historialMateria.map((item: any, idx: number) => (
+                      <tr key={item.id} className={idx % 2 === 0 ? "bg-white" : "bg-gray-50"}>
+                        <td className="px-3 py-2 text-gray-900">
+                          {new Date(item.created_at).toLocaleDateString()} <br />
+                          <span className="text-xs text-gray-500">
+                            {new Date(item.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2 text-gray-700 font-medium">{item.reason}</td>
+                        <td className="px-3 py-2 text-right text-gray-900">{item.quantity_before}</td>
+                        <td className="px-3 py-2 text-right text-gray-900">{item.quantity_after}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </CostsModal>
+
+        {/* MODAL: Historial de Fórmula */}
+        <CostsModal
+          isOpen={mostrarHistorialFormula}
+          title="Historial de Cambios"
+          onClose={() => {
+            setMostrarHistorialFormula(false);
+            setHistorialFormula([]);
+          }}
+        >
+          <div className="space-y-4">
+            {loadingHistorial ? (
+              <p className="text-gray-500">Cargando historial...</p>
+            ) : historialFormula.length === 0 ? (
+              <p className="text-gray-500 text-center py-4">No hay cambios registrados</p>
+            ) : (
+              <div className="space-y-2">
+                {historialFormula.map((item: any) => (
+                  <div key={item.id} className="bg-gray-50 rounded-lg p-3 border border-gray-200">
+                    <div className="flex justify-between items-start gap-2 mb-1">
+                      <div className="font-semibold text-gray-900">
+                        {item.change_type === "created"
+                          ? "📝 Creada"
+                          : item.change_type === "ingredient_added"
+                          ? "➕ Ingrediente agregado"
+                          : item.change_type === "ingredient_removed"
+                          ? "➖ Ingrediente eliminado"
+                          : "✏️ Ingrediente modificado"}
+                      </div>
+                      <span className="text-xs text-gray-500">
+                        {new Date(item.created_at).toLocaleDateString()} {new Date(item.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                      </span>
+                    </div>
+                    <div className="text-sm text-gray-700">{item.change_detail}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </CostsModal>
+
         {/* ────── TAB: REPORTES ────── */}
         {activeTab === "reportes" && (
-          <div className="rounded-2xl border-2 border-dashed border-gray-300 p-16 text-center bg-gray-50">
-            <BarChart3 size={80} className="mx-auto mb-4 text-gray-300" strokeWidth={1.5} />
-            <h2 className="text-2xl font-bold text-gray-900 mb-3">
-              Reportes
-            </h2>
-            <p className="text-gray-600 mb-2 max-w-lg mx-auto">
-              Consulta gráficos de merma, rendimiento y costos de producción.
-            </p>
-            <p className="text-sm text-gray-500">
-              Funcionalidad en desarrollo
-            </p>
+          <div className="space-y-6">
+            {/* Sub-tabs de Reportes */}
+            <div className="flex gap-2 border-b border-gray-200 pb-4">
+              <button
+                className={`px-4 py-2 rounded-lg font-medium transition ${
+                  reportesTab === "resumen"
+                    ? "bg-blue-100 text-blue-700"
+                    : "text-gray-600 hover:bg-gray-100"
+                }`}
+                onClick={() => {
+                  setReportesTab("resumen");
+                  if (dataMerma.length === 0 && dataProduccion.length === 0) {
+                    cargarReportes();
+                  }
+                }}
+              >
+                📊 Resumen
+              </button>
+              <button
+                className={`px-4 py-2 rounded-lg font-medium transition ${
+                  reportesTab === "merma"
+                    ? "bg-blue-100 text-blue-700"
+                    : "text-gray-600 hover:bg-gray-100"
+                }`}
+                onClick={() => {
+                  setReportesTab("merma");
+                  if (dataMerma.length === 0) {
+                    cargarReportes();
+                  }
+                }}
+              >
+                ⚠️ Merma
+              </button>
+              <button
+                className={`px-4 py-2 rounded-lg font-medium transition ${
+                  reportesTab === "produccion"
+                    ? "bg-blue-100 text-blue-700"
+                    : "text-gray-600 hover:bg-gray-100"
+                }`}
+                onClick={() => {
+                  setReportesTab("produccion");
+                  if (dataProduccion.length === 0) {
+                    cargarReportes();
+                  }
+                }}
+              >
+                🏭 Producción
+              </button>
+            </div>
+
+            {/* RESUMEN */}
+            {reportesTab === "resumen" && (
+              <div className="space-y-6">
+                <h3 className="text-xl font-bold text-gray-900">Resumen General</h3>
+                
+                {loadingReportes ? (
+                  <p className="text-gray-500">Cargando datos...</p>
+                ) : (
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    {/* Total Merma */}
+                    <div className="bg-gradient-to-br from-red-50 to-orange-50 rounded-2xl p-4 border border-red-200">
+                      <div className="text-sm text-red-700 font-medium mb-2">Total Merma</div>
+                      <div className="text-2xl font-bold text-red-900">
+                        {dataMerma.reduce((sum: number, item: any) => sum + item.cantidad_merma, 0).toFixed(2)}
+                      </div>
+                      <div className="text-xs text-red-600 mt-2">
+                        {dataMerma.length} registros
+                      </div>
+                    </div>
+
+                    {/* Materia Prima Más Mermada */}
+                    <div className="bg-gradient-to-br from-amber-50 to-yellow-50 rounded-2xl p-4 border border-amber-200">
+                      <div className="text-sm text-amber-700 font-medium mb-2">Más Mermada</div>
+                      <div className="text-lg font-bold text-amber-900 truncate">
+                        {dataMerma.length > 0
+                          ? dataMerma.reduce((max: any, item: any) =>
+                              item.cantidad_merma > (max?.cantidad_merma || 0) ? item : max
+                            )?.material_name
+                          : "N/A"}
+                      </div>
+                    </div>
+
+                    {/* Total Productos */}
+                    <div className="bg-gradient-to-br from-blue-50 to-cyan-50 rounded-2xl p-4 border border-blue-200">
+                      <div className="text-sm text-blue-700 font-medium mb-2">Total Productos</div>
+                      <div className="text-2xl font-bold text-blue-900">
+                        {dataProduccion.length}
+                      </div>
+                      <div className="text-xs text-blue-600 mt-2">fórmulas registradas</div>
+                    </div>
+
+                    {/* Producto con Más Ingredientes */}
+                    <div className="bg-gradient-to-br from-green-50 to-emerald-50 rounded-2xl p-4 border border-green-200">
+                      <div className="text-sm text-green-700 font-medium mb-2">Más Ingredientes</div>
+                      <div className="text-lg font-bold text-green-900 truncate">
+                        {dataProduccion.length > 0
+                          ? dataProduccion.reduce((max: any, item: any) =>
+                              item.total_ingredientes > (max?.total_ingredientes || 0) ? item : max
+                            )?.product_name
+                          : "N/A"}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* MERMA */}
+            {reportesTab === "merma" && (
+              <div className="space-y-6">
+                <h3 className="text-xl font-bold text-gray-900">Análisis de Merma</h3>
+
+                {loadingReportes ? (
+                  <p className="text-gray-500">Cargando datos...</p>
+                ) : dataMerma.length === 0 ? (
+                  <div className="text-center py-8 text-gray-500">
+                    No hay registros de merma aún.
+                  </div>
+                ) : (
+                  <>
+                    {/* Tabla de Mermas */}
+                    <div className="overflow-x-auto rounded-2xl border border-gray-200">
+                      <table className="w-full text-sm">
+                        <thead className="bg-gray-50 border-b border-gray-200">
+                          <tr>
+                            <th className="px-4 py-3 text-left font-semibold text-gray-900">Fecha</th>
+                            <th className="px-4 py-3 text-left font-semibold text-gray-900">Materia Prima</th>
+                            <th className="px-4 py-3 text-left font-semibold text-gray-900">Estado</th>
+                            <th className="px-4 py-3 text-right font-semibold text-gray-900">Cantidad</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {dataMerma.slice(0, 10).map((item: any, idx: number) => (
+                            <tr
+                              key={item.id}
+                              className={idx % 2 === 0 ? "bg-white" : "bg-gray-50"}
+                            >
+                              <td className="px-4 py-3 text-gray-900">
+                                {new Date(item.created_at).toLocaleDateString()}
+                              </td>
+                              <td className="px-4 py-3 text-gray-900 font-medium">
+                                {item.material_name}
+                              </td>
+                              <td className="px-4 py-3 text-gray-600">{item.state_name}</td>
+                              <td className="px-4 py-3 text-right font-semibold text-red-600">
+                                {item.cantidad_merma} {item.unit}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    {dataMerma.length > 10 && (
+                      <p className="text-sm text-gray-500 text-center">
+                        Mostrando 10 de {dataMerma.length} registros
+                      </p>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+
+            {/* PRODUCCIÓN */}
+            {reportesTab === "produccion" && (
+              <div className="space-y-6">
+                <h3 className="text-xl font-bold text-gray-900">Análisis de Producción</h3>
+
+                {loadingReportes ? (
+                  <p className="text-gray-500">Cargando datos...</p>
+                ) : dataProduccion.length === 0 ? (
+                  <div className="text-center py-8 text-gray-500">
+                    No hay productos registrados aún.
+                  </div>
+                ) : (
+                  <>
+                    {/* Tabla de Productos */}
+                    <div className="overflow-x-auto rounded-2xl border border-gray-200">
+                      <table className="w-full text-sm">
+                        <thead className="bg-gray-50 border-b border-gray-200">
+                          <tr>
+                            <th className="px-4 py-3 text-left font-semibold text-gray-900">Producto</th>
+                            <th className="px-4 py-3 text-right font-semibold text-gray-900">Ingredientes</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {dataProduccion
+                            .sort((a: any, b: any) => b.total_ingredientes - a.total_ingredientes)
+                            .map((item: any, idx: number) => (
+                              <tr
+                                key={item.product_id}
+                                className={idx % 2 === 0 ? "bg-white" : "bg-gray-50"}
+                              >
+                                <td className="px-4 py-3 text-gray-900 font-medium">
+                                  {item.product_name}
+                                </td>
+                                <td className="px-4 py-3 text-right">
+                                  <span className="bg-blue-100 text-blue-700 px-3 py-1 rounded-full text-xs font-semibold">
+                                    {item.total_ingredientes}
+                                  </span>
+                                </td>
+                              </tr>
+                            ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
           </div>
         )}
 
         {/* ────── TAB: ALERTAS ────── */}
         {activeTab === "alertas" && (
-          <div className="rounded-2xl border-2 border-dashed border-gray-300 p-16 text-center bg-gray-50">
-            <Bell size={80} className="mx-auto mb-4 text-gray-300" strokeWidth={1.5} />
-            <h2 className="text-2xl font-bold text-gray-900 mb-3">
-              Alertas
-            </h2>
-            <p className="text-gray-600 mb-2 max-w-lg mx-auto">
-              Aquí aparecerán alertas de stock bajo, mermas anormales y variancies.
-            </p>
-            <p className="text-sm text-gray-500">
-              Funcionalidad en desarrollo
-            </p>
+          <div className="space-y-6">
+            {/* Encabezado con botón cargar */}
+            <div className="flex justify-between items-center">
+              <h3 className="text-xl font-bold text-gray-900">
+                Alertas {alertasNoLeidas > 0 && (
+                  <span className="ml-2 inline-block bg-red-100 text-red-700 px-3 py-1 rounded-full text-sm font-semibold">
+                    {alertasNoLeidas} nuevas
+                  </span>
+                )}
+              </h3>
+              <button
+                className="btn btn-primary text-sm"
+                onClick={obtenerAlertas}
+                disabled={loadingAlertas}
+              >
+                {loadingAlertas ? "Cargando..." : "🔄 Recargar"}
+              </button>
+            </div>
+
+            {/* Filtros */}
+            <div className="flex gap-2">
+              <button
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition ${
+                  filtroAlertas === "todas"
+                    ? "bg-blue-100 text-blue-700"
+                    : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                }`}
+                onClick={() => setFiltroAlertas("todas")}
+              >
+                Todas
+              </button>
+              <button
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition ${
+                  filtroAlertas === "red"
+                    ? "bg-red-100 text-red-700"
+                    : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                }`}
+                onClick={() => setFiltroAlertas("red")}
+              >
+                🔴 Críticas
+              </button>
+              <button
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition ${
+                  filtroAlertas === "yellow"
+                    ? "bg-yellow-100 text-yellow-700"
+                    : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                }`}
+                onClick={() => setFiltroAlertas("yellow")}
+              >
+                🟡 Advertencias
+              </button>
+            </div>
+
+            {/* Tabla de alertas */}
+            {loadingAlertas ? (
+              <p className="text-gray-500">Cargando alertas...</p>
+            ) : alertas.length === 0 ? (
+              <div className="rounded-2xl border-2 border-dashed border-green-300 p-12 text-center bg-green-50">
+                <Bell size={60} className="mx-auto mb-4 text-green-300" strokeWidth={1.5} />
+                <h3 className="text-xl font-bold text-green-900 mb-2">Sin alertas activas</h3>
+                <p className="text-green-700">Todo está bajo control ✓</p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto rounded-2xl border border-gray-200">
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-50 border-b border-gray-200">
+                    <tr>
+                      <th className="px-4 py-3 text-left font-semibold text-gray-900">Severidad</th>
+                      <th className="px-4 py-3 text-left font-semibold text-gray-900">Tipo</th>
+                      <th className="px-4 py-3 text-left font-semibold text-gray-900">Mensaje</th>
+                      <th className="px-4 py-3 text-left font-semibold text-gray-900">Fecha</th>
+                      <th className="px-4 py-3 text-center font-semibold text-gray-900">Acciones</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {alertas
+                      .filter((a) => filtroAlertas === "todas" || a.severity === filtroAlertas)
+                      .map((alerta: any, idx: number) => (
+                        <tr
+                          key={alerta.id}
+                          className={`${
+                            idx % 2 === 0 ? "bg-white" : "bg-gray-50"
+                          } ${!alerta.is_read ? "border-l-4 border-l-blue-500" : ""}`}
+                        >
+                          <td className="px-4 py-3">
+                            {alerta.severity === "red" ? (
+                              <span className="text-2xl">🔴</span>
+                            ) : (
+                              <span className="text-2xl">🟡</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3 font-medium text-gray-900">
+                            {alerta.type === "merma_anormal"
+                              ? "Merma Anormal"
+                              : alerta.type === "stock_bajo"
+                              ? "Stock Bajo"
+                              : "Sin Stock"}
+                          </td>
+                          <td className="px-4 py-3 text-gray-700">{alerta.message}</td>
+                          <td className="px-4 py-3 text-gray-600 text-xs">
+                            {new Date(alerta.created_at).toLocaleDateString()} <br />
+                            {new Date(alerta.created_at).toLocaleTimeString([], {
+                              hour: "2-digit",
+                              minute: "2-digit",
+                            })}
+                          </td>
+                          <td className="px-4 py-3 text-center space-x-2">
+                            {!alerta.is_read && (
+                              <button
+                                className="text-blue-600 hover:text-blue-800 font-medium text-xs"
+                                onClick={() => marcarAlertaLeida(alerta.id)}
+                                title="Marcar como leída"
+                              >
+                                ✓
+                              </button>
+                            )}
+                            <button
+                              className="text-red-600 hover:text-red-800 font-medium text-xs"
+                              onClick={() => eliminarAlerta(alerta.id)}
+                              title="Eliminar"
+                            >
+                              ✕
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         )}
       </PageShell>
