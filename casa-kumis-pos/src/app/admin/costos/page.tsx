@@ -808,6 +808,241 @@ export default function AdminCostosPage() {
     }
   };
 
+  // Registrar Merma Adicional
+  const registrarMermaAdicional = async () => {
+    if (!transformMaterial || !transformFromState || !wasteQty) {
+      setErr("Selecciona materia prima, estado y cantidad.");
+      return;
+    }
+
+    const qty = parseFloat(wasteQty);
+    if (isNaN(qty) || qty <= 0) {
+      setErr("La cantidad debe ser mayor a 0.");
+      return;
+    }
+
+    setSavingWaste(true);
+    try {
+      const session = await supabase.auth.getSession();
+      const userId = session.data.session?.user.id;
+
+      // Registrar batch de merma adicional
+      const { data: batchData, error: batchError } = await supabase
+        .from("raw_material_batches")
+        .insert([
+          {
+            raw_material_id: transformMaterial,
+            from_state_id: transformFromState,
+            to_state_id: transformFromState, // Mismo estado (merma no cambia estado)
+            quantity_in: qty,
+            quantity_out: 0,
+            batch_date: new Date().toISOString().split("T")[0],
+            observations: wasteReason || null,
+            created_by: userId,
+          },
+        ])
+        .select();
+
+      if (batchError) throw new Error(batchError.message);
+
+      // Obtener cantidad actual
+      const { data: inventoryData } = await supabase
+        .from("raw_material_inventory")
+        .select("*")
+        .eq("raw_material_id", transformMaterial)
+        .eq("state_id", transformFromState);
+
+      if (inventoryData && inventoryData[0]) {
+        const newQty = (inventoryData[0].quantity || 0) - qty;
+        const { error: updateError } = await supabase
+          .from("raw_material_inventory")
+          .update({ quantity: newQty, last_updated: new Date().toISOString() })
+          .eq("id", inventoryData[0].id);
+
+        if (updateError) throw new Error(updateError.message);
+
+        // Audit log
+        await supabase.from("raw_material_inventory_audit_logs").insert([
+          {
+            raw_material_id: transformMaterial,
+            state_id: transformFromState,
+            quantity_before: inventoryData[0].quantity || 0,
+            quantity_after: newQty,
+            reason: "Merma Adicional",
+            related_id: batchData?.[0]?.id,
+          },
+        ]);
+      }
+
+      // Obtener unidad de la materia prima
+      const materialObj = materialesPrimas.find((m) => m.id === transformMaterial);
+      const unit = materialObj?.unit || "unidades";
+
+      // Mensaje de éxito con unidad correcta
+      setErr(null);
+      alert(`✓ Merma registrada: ${qty} ${unit} descuentadas`);
+      
+      // Recargar datos
+      await cargarMaterialesPrimas();
+      
+      // Limpiar formulario
+      setTransformMaterial("");
+      setTransformFromState("");
+      setWasteQty("");
+      setWasteReason("");
+    } catch (e: any) {
+      setErr(e.message ?? "Error registrando merma.");
+      console.error("Error en merma:", e);
+    } finally {
+      setSavingWaste(false);
+    }
+  };
+
+  // Función recursiva para descontar ingredientes anidados
+  const descontarIngredientesRecursivos = async (
+    productId: string,
+    qtyProduce: number
+  ) => {
+    // Obtener los ingredientes del producto
+    const { data: ingredientsData, error: ingredientsError } = await supabase
+      .from("product_ingredients")
+      .select("*")
+      .eq("product_id", productId);
+
+    if (ingredientsError) throw new Error(ingredientsError.message);
+
+    // Para cada ingrediente
+    for (const ingredient of ingredientsData || []) {
+      const qtyNeeded = (ingredient.quantity || 0) * qtyProduce;
+
+      if (ingredient.ingredient_type === "RAW_MATERIAL") {
+        // Es materia prima - descontar directamente
+        const { data: invData } = await supabase
+          .from("raw_material_inventory")
+          .select("*")
+          .eq("raw_material_id", ingredient.ingredient_id)
+          .eq("state_id", ingredient.state_id);
+
+        if (invData && invData[0]) {
+          const newQty = (invData[0].quantity || 0) - qtyNeeded;
+          const { error: updateError } = await supabase
+            .from("raw_material_inventory")
+            .update({ quantity: newQty, last_updated: new Date().toISOString() })
+            .eq("id", invData[0].id);
+
+          if (updateError) throw new Error(updateError.message);
+
+          // Audit
+          await supabase.from("raw_material_inventory_audit_logs").insert([
+            {
+              raw_material_id: ingredient.ingredient_id,
+              state_id: ingredient.state_id,
+              quantity_before: invData[0].quantity || 0,
+              quantity_after: newQty,
+              reason: "Producción",
+            },
+          ]);
+        }
+      } else if (ingredient.ingredient_type === "PRODUCT") {
+        // Es un producto - descontar recursivamente sus ingredientes
+        await descontarIngredientesRecursivos(ingredient.ingredient_id, qtyNeeded);
+      }
+    }
+  };
+
+  // Registrar Producción
+  const registrarProduccion = async () => {
+    if (!produceProduct || !produceQty) {
+      setErr("Selecciona producto y cantidad.");
+      return;
+    }
+
+    const qty = parseFloat(produceQty);
+    if (isNaN(qty) || qty <= 0) {
+      setErr("La cantidad debe ser mayor a 0.");
+      return;
+    }
+
+    setSavingProduce(true);
+    try {
+      const session = await supabase.auth.getSession();
+      const userId = session.data.session?.user.id;
+
+      // Obtener la fórmula del producto
+      const { data: formulaData, error: formulaError } = await supabase
+        .from("products")
+        .select("*")
+        .eq("id", produceProduct)
+        .single();
+
+      if (formulaError) throw new Error("Producto no encontrado.");
+
+      const formula = formulaData as ProductFormula;
+
+      // Obtener ingredientes
+      const { data: ingredientsData, error: ingredientsError } = await supabase
+        .from("product_ingredients")
+        .select("*")
+        .eq("product_id", produceProduct);
+
+      if (ingredientsError) throw new Error(ingredientsError.message);
+
+      // Descontar ingredientes del inventario
+      for (const ingredient of ingredientsData || []) {
+        const qtyNeeded = (ingredient.quantity || 0) * qty;
+
+        if (ingredient.ingredient_type === "RAW_MATERIAL") {
+          // Descontar materia prima
+          const { data: invData } = await supabase
+            .from("raw_material_inventory")
+            .select("*")
+            .eq("raw_material_id", ingredient.ingredient_id)
+            .eq("state_id", ingredient.state_id);
+
+          if (invData && invData[0]) {
+            const newQty = (invData[0].quantity || 0) - qtyNeeded;
+            const { error: updateError } = await supabase
+              .from("raw_material_inventory")
+              .update({ quantity: newQty, last_updated: new Date().toISOString() })
+              .eq("id", invData[0].id);
+
+            if (updateError) throw new Error(updateError.message);
+
+            // Audit
+            await supabase.from("raw_material_inventory_audit_logs").insert([
+              {
+                raw_material_id: ingredient.ingredient_id,
+                state_id: ingredient.state_id,
+                quantity_before: invData[0].quantity || 0,
+                quantity_after: newQty,
+                reason: "Producción",
+              },
+            ]);
+          }
+        } else if (ingredient.ingredient_type === "PRODUCT") {
+          // Es un producto - descontar recursivamente sus ingredientes
+          await descontarIngredientesRecursivos(ingredient.ingredient_id, qtyNeeded);
+        }
+      }
+
+      // Mensaje de éxito
+      setErr(null);
+      alert(`✓ Producción registrada: ${qty} unidades fabricadas`);
+      
+      // Recargar datos para refrescar
+      await cargarMaterialesPrimas();
+      
+      setProduceProduct("");
+      setProduceQty("");
+      setProduceObservations("");
+    } catch (e: any) {
+      setErr(e.message ?? "Error registrando producción.");
+      console.error("Error en producción:", e);
+    } finally {
+      setSavingProduce(false);
+    }
+  };
+
   // ============================================================================
   // FUNCIONES PARA FÓRMULAS
   // ============================================================================
@@ -878,6 +1113,8 @@ export default function AdminCostosPage() {
       );
 
       setFormulas(formulasData);
+      // También guardar lista simple de productos para dropdown
+      setProducts((productsData ?? []).map(p => ({ id: p.id, name: p.name })));
     } catch (e: any) {
       setErr(e.message ?? "Error cargando fórmulas.");
     }
@@ -1681,12 +1918,22 @@ export default function AdminCostosPage() {
                   </div>
 
                   <FormSelect
-                    label="Tipo de Merma"
-                    value={wasteType}
-                    onChange={setWasteType}
-                    options={wasteTypes.map((w) => ({ value: w.id, label: `${w.name} (${w.code})` }))}
+                    label="Materia Prima"
+                    value={transformMaterial}
+                    onChange={setTransformMaterial}
+                    options={materialesPrimas.map((m) => ({ value: m.id, label: m.name }))}
                     disabled={savingWaste}
                   />
+
+                  {transformMaterial && (
+                    <FormSelect
+                      label="Estado"
+                      value={transformFromState}
+                      onChange={setTransformFromState}
+                      options={(statesByMaterial[transformMaterial] ?? []).map((s) => ({ value: s.id, label: s.name }))}
+                      disabled={savingWaste}
+                    />
+                  )}
 
                   <FormInput
                     label="Cantidad Pérdida"
@@ -1707,7 +1954,7 @@ export default function AdminCostosPage() {
 
                   <button
                     className="btn btn-primary w-full"
-                    onClick={() => setErr("Funcionalidad en desarrollo")}
+                    onClick={registrarMermaAdicional}
                     disabled={savingWaste}
                   >
                     {savingWaste ? "Registrando..." : "Registrar Merma"}
@@ -1747,7 +1994,7 @@ export default function AdminCostosPage() {
 
                   <button
                     className="btn btn-primary w-full"
-                    onClick={() => setErr("Funcionalidad en desarrollo")}
+                    onClick={registrarProduccion}
                     disabled={savingProduce}
                   >
                     {savingProduce ? "Registrando..." : "Registrar Producción"}
