@@ -160,6 +160,18 @@ export default function AdminCostosPage() {
   const [showEditFormula, setShowEditFormula] = useState(false);
   const [showAddIngredient, setShowAddIngredient] = useState(false);
 
+  // EDITAR CANTIDAD DE INGREDIENTE
+  const [editingIngredientId, setEditingIngredientId] = useState("");
+  const [editingIngredientQty, setEditingIngredientQty] = useState("");
+  const [showEditIngredient, setShowEditIngredient] = useState(false);
+  const [savingEditIngredient, setSavingEditIngredient] = useState(false);
+
+  // DUPLICAR PRODUCTO
+  const [duplicatingProductId, setDuplicatingProductId] = useState("");
+  const [duplicatingProductName, setDuplicatingProductName] = useState("");
+  const [showDuplicateModal, setShowDuplicateModal] = useState(false);
+  const [savingDuplicate, setSavingDuplicate] = useState(false);
+
   // Crear nueva fórmula
   const [newFormulaName, setNewFormulaName] = useState("");
   const [newFormulaUnit, setNewFormulaUnit] = useState("u");
@@ -1317,6 +1329,124 @@ export default function AdminCostosPage() {
     }
   };
 
+  // Editar cantidad de ingrediente
+  const editarCantidadIngrediente = async () => {
+    if (!selectedFormula || !editingIngredientId || !editingIngredientQty) {
+      setErr("Completa los campos.");
+      return;
+    }
+
+    const newQty = parseFloat(editingIngredientQty);
+    if (isNaN(newQty) || newQty <= 0) {
+      setErr("Cantidad debe ser mayor a 0.");
+      return;
+    }
+
+    setSavingEditIngredient(true);
+    try {
+      const { error } = await supabase
+        .from("product_ingredients")
+        .update({ quantity: newQty })
+        .eq("id", editingIngredientId);
+
+      if (error) throw new Error(error.message);
+
+      // Actualizar estado local
+      const updatedFormula = {
+        ...selectedFormula,
+        ingredients: selectedFormula.ingredients.map((ing) =>
+          ing.id === editingIngredientId
+            ? { ...ing, quantity: newQty }
+            : ing
+        ),
+      };
+
+      setSelectedFormula(updatedFormula);
+      setFormulas(
+        formulas.map((f) => (f.id === selectedFormula.id ? updatedFormula : f))
+      );
+
+      setErr(null);
+      setShowEditIngredient(false);
+      setEditingIngredientId("");
+      setEditingIngredientQty("");
+      alert(`✓ Cantidad actualizada`);
+    } catch (e: any) {
+      setErr(e.message ?? "Error editando cantidad.");
+    } finally {
+      setSavingEditIngredient(false);
+    }
+  };
+
+  // Duplicar producto
+  const duplicarProducto = async () => {
+    if (!duplicatingProductName.trim()) {
+      setErr("El nombre del nuevo producto es requerido.");
+      return;
+    }
+
+    setSavingDuplicate(true);
+    try {
+      const session = await supabase.auth.getSession();
+      const userId = session.data.session?.user.id;
+
+      // Obtener producto original
+      const productoOriginal = formulas.find((f) => f.id === duplicatingProductId);
+      if (!productoOriginal) throw new Error("Producto original no encontrado.");
+
+      // Crear nuevo producto
+      const { data: newProductData, error: createError } = await supabase
+        .from("products")
+        .insert([
+          {
+            name: duplicatingProductName,
+            unit: productoOriginal.unit,
+          },
+        ])
+        .select();
+
+      if (createError) throw new Error(createError.message);
+
+      const newProductId = newProductData[0].id;
+
+      // Copiar todos los ingredientes
+      const { data: ingredientesOriginales } = await supabase
+        .from("product_ingredients")
+        .select("*")
+        .eq("product_id", duplicatingProductId);
+
+      if (ingredientesOriginales && ingredientesOriginales.length > 0) {
+        const ingredientesCopia = ingredientesOriginales.map((ing) => ({
+          product_id: newProductId,
+          ingredient_id: ing.ingredient_id,
+          ingredient_type: ing.ingredient_type,
+          quantity: ing.quantity,
+          unit: ing.unit,
+          state_id: ing.state_id,
+        }));
+
+        const { error: ingError } = await supabase
+          .from("product_ingredients")
+          .insert(ingredientesCopia);
+
+        if (ingError) throw new Error(ingError.message);
+      }
+
+      // Recargar fórmulas
+      await cargarFormulas();
+
+      setErr(null);
+      setShowDuplicateModal(false);
+      setDuplicatingProductId("");
+      setDuplicatingProductName("");
+      alert(`✓ Producto duplicado: "${duplicatingProductName}"`);
+    } catch (e: any) {
+      setErr(e.message ?? "Error duplicando producto.");
+    } finally {
+      setSavingDuplicate(false);
+    }
+  };
+
   // ============================================================================
   // FUNCIÓN DE ANÁLISIS DE PRODUCCIÓN
   // ============================================================================
@@ -2163,14 +2293,28 @@ export default function AdminCostosPage() {
                   title={selectedFormula.name}
                   subtitle={selectedFormula.description || "Sin descripción"}
                   action={
-                    <button
-                      className="p-2 hover:bg-red-50 rounded-lg transition inline-flex items-center gap-2 text-red-600"
-                      onClick={() => eliminarFormula(selectedFormula.id)}
-                      title="Elimina este producto y todos sus ingredientes. Esta acción no se puede deshacer."
-                    >
-                      <Trash2 size={18} />
-                      Eliminar
-                    </button>
+                    <div className="flex gap-2">
+                      <button
+                        className="p-2 hover:bg-blue-50 rounded-lg transition inline-flex items-center gap-2 text-blue-600"
+                        onClick={() => {
+                          setDuplicatingProductId(selectedFormula.id);
+                          setDuplicatingProductName(`${selectedFormula.name} (copia)`);
+                          setShowDuplicateModal(true);
+                        }}
+                        title="Duplica este producto con todos sus ingredientes."
+                      >
+                        📋
+                        Duplicar
+                      </button>
+                      <button
+                        className="p-2 hover:bg-red-50 rounded-lg transition inline-flex items-center gap-2 text-red-600"
+                        onClick={() => eliminarFormula(selectedFormula.id)}
+                        title="Elimina este producto y todos sus ingredientes. Esta acción no se puede deshacer."
+                      >
+                        <Trash2 size={18} />
+                        Eliminar
+                      </button>
+                    </div>
                   }
                 >
                   <div className="space-y-4">
@@ -2230,7 +2374,17 @@ export default function AdminCostosPage() {
                                     )}
                                   </div>
                                   <div className="text-xs text-gray-500 mt-1">
-                                    {ing.quantity} {ing.unit}
+                                    <button
+                                      className="hover:text-blue-600 hover:underline transition cursor-pointer"
+                                      onClick={() => {
+                                        setEditingIngredientId(ing.id);
+                                        setEditingIngredientQty(ing.quantity.toString());
+                                        setShowEditIngredient(true);
+                                      }}
+                                      title="Click para editar cantidad"
+                                    >
+                                      {ing.quantity} {ing.unit}
+                                    </button>
                                     <span className="mx-1">•</span>
                                     <Badge
                                       label={ing.ingredient_type === "RAW_MATERIAL" ? "Materia Prima" : "Producto"}
@@ -2548,6 +2702,66 @@ export default function AdminCostosPage() {
             </CostsModal>
           </div>
         )}
+
+        {/* MODAL: Editar Cantidad de Ingrediente */}
+        <CostsModal
+          isOpen={showEditIngredient}
+          title="Editar Cantidad"
+          onClose={() => {
+            setShowEditIngredient(false);
+            setEditingIngredientId("");
+            setEditingIngredientQty("");
+          }}
+        >
+          <div className="space-y-4">
+            <FormInput
+              label="Nueva Cantidad"
+              value={editingIngredientQty}
+              onChange={setEditingIngredientQty}
+              type="number"
+              step="0.01"
+              placeholder="0"
+              disabled={savingEditIngredient}
+            />
+
+            <button
+              className="btn btn-primary w-full"
+              onClick={editarCantidadIngrediente}
+              disabled={savingEditIngredient}
+            >
+              {savingEditIngredient ? "Guardando..." : "Guardar Cantidad"}
+            </button>
+          </div>
+        </CostsModal>
+
+        {/* MODAL: Duplicar Producto */}
+        <CostsModal
+          isOpen={showDuplicateModal}
+          title="Duplicar Producto"
+          onClose={() => {
+            setShowDuplicateModal(false);
+            setDuplicatingProductId("");
+            setDuplicatingProductName("");
+          }}
+        >
+          <div className="space-y-4">
+            <FormInput
+              label="Nombre del Nuevo Producto"
+              value={duplicatingProductName}
+              onChange={setDuplicatingProductName}
+              placeholder="Ej: Empanada de Carne (copia)"
+              disabled={savingDuplicate}
+            />
+
+            <button
+              className="btn btn-primary w-full"
+              onClick={duplicarProducto}
+              disabled={savingDuplicate}
+            >
+              {savingDuplicate ? "Duplicando..." : "Duplicar Producto"}
+            </button>
+          </div>
+        </CostsModal>
 
         {/* ────── TAB: REPORTES ────── */}
         {activeTab === "reportes" && (
