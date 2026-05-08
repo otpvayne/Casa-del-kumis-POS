@@ -305,18 +305,28 @@ export function CostsModal({
   children,
   onClose,
   actions,
+  maxWidth = "md",
 }: {
   isOpen: boolean;
   title: string;
   children: ReactNode;
   onClose: () => void;
   actions?: { label: string; onClick: () => void; variant?: "primary" | "secondary"; disabled?: boolean }[];
+  maxWidth?: "sm" | "md" | "lg" | "xl" | "2xl";
 }) {
   if (!isOpen) return null;
 
+  const maxWidthClass = {
+    sm: "max-w-sm",
+    md: "max-w-md",
+    lg: "max-w-lg",
+    xl: "max-w-xl",
+    "2xl": "max-w-2xl",
+  }[maxWidth];
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="card w-full max-w-md max-h-[90vh] overflow-auto">
+      <div className={`card w-full ${maxWidthClass} max-h-[90vh] overflow-auto`}>
         <div className="card-h flex items-center justify-between sticky top-0">
           <div className="text-lg font-extrabold">{title}</div>
           <button onClick={onClose} className="btn text-lg">

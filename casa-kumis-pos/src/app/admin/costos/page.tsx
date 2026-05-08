@@ -173,9 +173,10 @@ export default function AdminCostosPage() {
   const [savingDuplicate, setSavingDuplicate] = useState(false);
 
   // REPORTES
-  const [reportesTab, setReportesTab] = useState<"resumen" | "merma" | "produccion">("resumen");
+  const [reportesTab, setReportesTab] = useState<"resumen" | "merma" | "produccion" | "variancia">("resumen");
   const [dataMerma, setDataMerma] = useState<any[]>([]);
   const [dataProduccion, setDataProduccion] = useState<any[]>([]);
+  const [dataVariancia, setDataVariancia] = useState<any[]>([]);
   const [loadingReportes, setLoadingReportes] = useState(false);
 
   // ALERTAS
@@ -191,6 +192,15 @@ export default function AdminCostosPage() {
   const [loadingHistorial, setLoadingHistorial] = useState(false);
   const [mostrarHistorialMateria, setMostrarHistorialMateria] = useState(false);
   const [mostrarHistorialFormula, setMostrarHistorialFormula] = useState(false);
+
+  // ANÁLISIS DE VARIANCIA
+  const [mostrarAnalisisVariancia, setMostrarAnalisisVariancia] = useState(false);
+  const [productoAnalisis, setProductoAnalisis] = useState("");
+  const [teoricoAnalisis, setTeoricoAnalisis] = useState(0);
+  const [realAnalisis, setRealAnalisis] = useState("");
+  const [ingredientesReales, setIngredientesReales] = useState<Record<string, string>>({});
+  const [varianciaCalculada, setVarianciaCalculada] = useState<any>(null);
+  const [savingVariancia, setSavingVariancia] = useState(false);
 
   // Crear nueva fórmula
   const [newFormulaName, setNewFormulaName] = useState("");
@@ -299,6 +309,21 @@ export default function AdminCostosPage() {
       }, 100);
     }
   }, [selectedFormula, activeTab]);
+
+  // Cargar fórmulas cuando se abre el modal de variancia
+  useEffect(() => {
+    if (mostrarAnalisisVariancia && formulas.length === 0) {
+      cargarFormulas();
+    }
+  }, [mostrarAnalisisVariancia]);
+
+  // Cargar reportes automáticamente cuando se abre el tab de reportes
+  useEffect(() => {
+    if (activeTab === "reportes" && dataMerma.length === 0 && dataProduccion.length === 0) {
+      setReportesTab("resumen");
+      cargarReportes();
+    }
+  }, [activeTab]);
 
   const cargarMaterialesPrimas = async () => {
     try {
@@ -1258,6 +1283,34 @@ export default function AdminCostosPage() {
         }
         setDataProduccion(Object.values(prodMap));
       }
+
+      // Cargar variancia
+      const { data: varianciaData, error: varianciaError } = await supabase
+        .from("production_variance_log")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .limit(100);
+
+      if (!varianciaError && varianciaData) {
+        // Enriquecer con nombres de productos
+        const enrichedVariancia = await Promise.all(
+          (varianciaData || []).map(async (item: any) => {
+            const prod = formulas.find((f) => f.id === item.product_id);
+            return {
+              ...item,
+              product_name: prod?.name ?? "Desconocido",
+              fecha: new Date(item.created_at).toLocaleDateString(),
+              hora: new Date(item.created_at).toLocaleTimeString([], {
+                hour: "2-digit",
+                minute: "2-digit",
+              }),
+            };
+          })
+        );
+        setDataVariancia(enrichedVariancia);
+      } else {
+        setDataVariancia([]);
+      }
     } catch (e: any) {
       console.error("Error cargando reportes:", e);
     } finally {
@@ -1456,6 +1509,259 @@ export default function AdminCostosPage() {
       console.error("Error en registrarCambioFormula:", e);
     }
   };
+
+  // Componente Tooltip
+  const Tooltip = ({ text }: { text: string }) => (
+    <span
+      className="inline-flex items-center justify-center w-5 h-5 ml-1 text-xs font-bold text-white bg-blue-500 rounded-full cursor-help hover:bg-blue-600"
+      title={text}
+    >
+      i
+    </span>
+  );
+
+  // Construir árbol jerárquico de ingredientes
+  const construirArbolIngredientes = (
+    productId: string,
+    cantidadProducto: number = 1,
+    nivel: number = 0,
+    visitados = new Set<string>()
+  ): React.ReactNode[] => {
+    if (visitados.has(productId)) return [];
+    visitados.add(productId);
+
+    const formula = formulas.find((f) => f.id === productId);
+    if (!formula) return [];
+
+    const elementos: React.ReactNode[] = [];
+    const indent = nivel * 20;
+
+    for (const ing of formula.ingredients) {
+      const cantidadNecesaria = (ing.quantity || 0) * cantidadProducto;
+
+      if (ing.ingredient_type === "RAW_MATERIAL") {
+        const realUsed = ingredientesReales[ing.ingredient_id]
+          ? parseFloat(ingredientesReales[ing.ingredient_id])
+          : cantidadNecesaria;
+        const variancia = realUsed - cantidadNecesaria;
+        const varianciaColor = variancia > 0 ? "text-red-600" : variancia < 0 ? "text-green-600" : "text-gray-600";
+
+        elementos.push(
+          <div key={`${ing.ingredient_id}-${nivel}`} style={{ marginLeft: `${indent}px` }} className="py-2 text-sm border-b border-gray-200">
+            <div className="flex justify-between items-start gap-2">
+              <div className="flex-1">
+                <div className="font-medium text-gray-900">{ing.ingredient_name}</div>
+                <div className="text-xs text-gray-600">
+                  Planeado: {cantidadNecesaria.toFixed(2)} {ing.unit}
+                </div>
+              </div>
+              <div className={`text-xs font-semibold ${varianciaColor}`}>
+                Usado: {realUsed.toFixed(2)} {ing.unit}
+                {variancia !== 0 && ` (${variancia > 0 ? '+' : ''}${variancia.toFixed(2)})`}
+              </div>
+            </div>
+          </div>
+        );
+      } else {
+        const subFormula = formulas.find((f) => f.id === ing.ingredient_id);
+        elementos.push(
+          <div key={`${ing.ingredient_id}-${nivel}`} style={{ marginLeft: `${indent}px` }} className="py-2">
+            <div className="font-semibold text-gray-900 bg-gray-100 px-2 py-1 rounded flex items-center gap-2">
+              📦 {subFormula?.name || ing.ingredient_name} (x{cantidadNecesaria.toFixed(2)})
+            </div>
+            {construirArbolIngredientes(ing.ingredient_id, cantidadNecesaria, nivel + 1, new Set(visitados))}
+          </div>
+        );
+      }
+    }
+
+    return elementos;
+  };
+
+  // Calcular máximo de unidades producibles (recursivo para productos anidados)
+  const calcularMaximoProducible = (productId: string, visitados = new Set<string>()): number => {
+    if (visitados.has(productId)) return 0;
+    visitados.add(productId);
+
+    const formula = formulas.find((f) => f.id === productId);
+    if (!formula || formula.ingredients.length === 0) return Infinity;
+
+    let maximos: number[] = [];
+
+    for (const ing of formula.ingredients) {
+      if (ing.ingredient_type === "RAW_MATERIAL") {
+        const stock = (inventoryByMaterial[ing.ingredient_id] || []).find(
+          (i: any) => i.state_id === ing.ingredient_state_id
+        )?.quantity || 0;
+        maximos.push(Math.floor(stock / (ing.quantity || 1)));
+      } else {
+        const subMaximo = calcularMaximoProducible(ing.ingredient_id, visitados);
+        maximos.push(Math.floor(subMaximo / (ing.quantity || 1)));
+      }
+    }
+
+    return maximos.length > 0 ? Math.min(...maximos) : 0;
+  };
+
+  // Calcular variancia de producción
+  const calcularVariancia = (productId: string, cantidadReal: number) => {
+    const formula = formulas.find((f) => f.id === productId);
+    if (!formula) return;
+
+    // Calcular ingredientes planeados vs lo que se usaría teóricamente
+    const ingredientsVariance: Record<string, any> = {};
+    let totalVariancia = 0;
+    let totalPlaneado = 0;
+
+    for (const ing of formula.ingredients) {
+      const cantidadNecesaria = ing.quantity || 0;
+      const cantidadPlaneada = cantidadNecesaria * cantidadReal;
+
+      ingredientsVariance[ing.ingredient_id] = {
+        name: ing.ingredient_name,
+        planned: cantidadPlaneada,
+        unit: ing.unit,
+      };
+
+      totalPlaneado += cantidadPlaneada;
+    }
+
+    // Calcular máximo que se puede producir basado en stock
+    const quantityTeoricamente = calcularMaximoProducible(productId);
+
+    // La variancia es: (real - teórico máximo) / teórico máximo * 100
+    // Si real > teórico máximo = variancia positiva (desperdicio)
+    // Si real < teórico máximo = variancia negativa (ahorro)
+    const varianciaQty = cantidadReal - quantityTeoricamente;
+    const varianciaPercentaje =
+      quantityTeoricamente > 0
+        ? (varianciaQty / quantityTeoricamente) * 100
+        : 0;
+
+    setTeoricoAnalisis(quantityTeoricamente);
+    setVarianciaCalculada({
+      teórico: quantityTeoricamente,
+      real: cantidadReal,
+      cantidad_variancia: varianciaQty,
+      porcentaje_variancia: varianciaPercentaje.toFixed(2),
+      ingredientes: ingredientsVariance,
+    });
+  };
+
+  // Deducir ingredientes del stock cuando se registra variancia
+  const deductarIngredientes = async (
+    ingredientsList: any[],
+    realAmounts: Record<string, number>,
+    userId: string
+  ) => {
+    for (const ing of ingredientsList) {
+      const realUsed = realAmounts[ing.ingredient_id] || 0;
+
+      if (ing.ingredient_type === "RAW_MATERIAL") {
+        const inventoryRecords = (inventoryByMaterial[ing.ingredient_id] || []).filter(
+          (i: any) => i.state_id === ing.ingredient_state_id
+        );
+
+        if (inventoryRecords.length > 0) {
+          const inv = inventoryRecords[0];
+          const newQuantity = (inv.quantity || 0) - realUsed;
+
+          const { error } = await supabase
+            .from("raw_material_inventory")
+            .update({
+              quantity: Math.max(0, newQuantity),
+            })
+            .eq("id", inv.id);
+
+          if (error) throw new Error(`Error deducting ${ing.ingredient_name}: ${error.message}`);
+        }
+      } else if (ing.ingredient_type === "PRODUCT") {
+        const subFormula = formulas.find((f) => f.id === ing.ingredient_id);
+        if (subFormula) {
+          for (const subIng of subFormula.ingredients) {
+            const subRealAmounts: Record<string, number> = {};
+            subRealAmounts[subIng.ingredient_id] = (subIng.quantity || 0) * realUsed;
+            await deductarIngredientes([subIng], subRealAmounts, userId);
+          }
+        }
+      }
+    }
+  };
+
+  // Registrar variancia
+  const registrarVariancia = async () => {
+    if (!productoAnalisis || !realAnalisis || !varianciaCalculada) {
+      setErr("Completa todos los campos");
+      return;
+    }
+
+    const cantidadReal = parseInt(realAnalisis);
+    if (isNaN(cantidadReal) || cantidadReal <= 0) {
+      setErr("Cantidad real debe ser mayor a 0");
+      return;
+    }
+
+    setSavingVariancia(true);
+    try {
+      const session = await supabase.auth.getSession();
+      const userId = session.data.session?.user.id || "";
+
+      // Calcular variancia de ingredientes basado en input del usuario
+      const ingredientesVarianceDetallado: Record<string, any> = {};
+      const formula = formulas.find((f) => f.id === productoAnalisis);
+
+      for (const ing of formula?.ingredients || []) {
+        const realUsed = parseFloat(ingredientesReales[ing.ingredient_id] || "0");
+        const planned = (ing.quantity || 0) * cantidadReal;
+
+        ingredientesVarianceDetallado[ing.ingredient_id] = {
+          name: ing.ingredient_name,
+          planned,
+          real: realUsed,
+          variance: realUsed - planned,
+          variance_percentage:
+            planned > 0 ? (((realUsed - planned) / planned) * 100).toFixed(2) : 0,
+          unit: ing.unit,
+        };
+      }
+
+      const { error } = await supabase.from("production_variance_log").insert([
+        {
+          product_id: productoAnalisis,
+          quantity_planned: varianciaCalculada.teórico,
+          quantity_real: cantidadReal,
+          variance_quantity: cantidadReal - varianciaCalculada.teórico,
+          variance_percentage: parseFloat(varianciaCalculada.porcentaje_variancia),
+          ingredients_variance: ingredientesVarianceDetallado,
+          created_by: userId,
+        },
+      ]);
+
+      if (error) throw new Error(error.message);
+
+      // Deduct real ingredient amounts from inventory
+      const realAmountsNumeric: Record<string, number> = {};
+      for (const [id, value] of Object.entries(ingredientesReales)) {
+        realAmountsNumeric[id] = parseFloat(value as string);
+      }
+      await deductarIngredientes(formula?.ingredients || [], realAmountsNumeric, userId);
+
+      setErr(null);
+      alert(`✓ Variancia registrada y stock actualizado`);
+
+      // Limpiar y recargar
+      setMostrarAnalisisVariancia(false);
+      setProductoAnalisis("");
+      setRealAnalisis("");
+      setIngredientesReales({});
+      setVarianciaCalculada(null);
+      cargarMaterialesPrimas();
+    } catch (e: any) {
+      setErr(e.message ?? "Error registrando variancia");
+    } finally {
+      setSavingVariancia(false);
+    }
+  };
   const crearFormula = async () => {
     if (!newFormulaName.trim()) {
       setErr("El nombre del producto es requerido.");
@@ -1487,7 +1793,6 @@ export default function AdminCostosPage() {
         },
       ]);
 
-      // Registrar en historial
       await registrarCambioFormula(
         data[0].id,
         "created",
@@ -2031,6 +2336,20 @@ export default function AdminCostosPage() {
               </div>
             </div>
 
+            {/* Guía de uso */}
+            <div className="bg-blue-100 border border-blue-300 rounded-lg p-4 text-sm text-blue-900">
+              <div className="font-semibold mb-2 flex items-center gap-2">
+                <Info size={18} />
+                Como usar esta sección
+              </div>
+              <ol className="list-decimal list-inside space-y-1 text-xs">
+                <li>Crea nuevas materias primas usando el botón "Crear"</li>
+                <li>Cada materia prima debe tener al menos un estado (Cruda, Cocida, etc.)</li>
+                <li>Registra el inventario disponible de cada materia en cada estado</li>
+                <li>Usa el historial para ver todos los movimientos de inventario</li>
+              </ol>
+            </div>
+
             {/* Materias primas list */}
             <CostsCard
               title="Materias Primas"
@@ -2239,6 +2558,20 @@ export default function AdminCostosPage() {
         {/* ────── TAB: PRODUCCIÓN ────── */}
         {activeTab === "produccion" && (
           <div className="space-y-6">
+            {/* Guía de uso */}
+            <div className="bg-blue-100 border border-blue-300 rounded-lg p-4 text-sm text-blue-900">
+              <div className="font-semibold mb-2 flex items-center gap-2">
+                <Info size={18} />
+                Como usar esta sección
+              </div>
+              <ol className="list-decimal list-inside space-y-1 text-xs">
+                <li>Selecciona el tipo de registro que quieres hacer (abajo)</li>
+                <li>Completa los campos solicitados</li>
+                <li>Haz click en "Guardar" para registrar el movimiento</li>
+                <li>Los datos se guardan automáticamente en el historial</li>
+              </ol>
+            </div>
+
             {/* Selector de tipo de registro */}
             <CostsCard>
               <div className="flex flex-wrap gap-2">
@@ -2246,13 +2579,19 @@ export default function AdminCostosPage() {
                   { id: "entrada", label: "Entrada Inicial", icon: Download },
                   { id: "transformacion", label: "Transformación", icon: ArrowRightLeft },
                   { id: "merma", label: "Merma Adicional", icon: AlertTriangle },
-                  { id: "produccion", label: "Producción", icon: Zap },
+                  { id: "variancia", label: "Analizar Variancia", icon: TrendingDown },
                 ].map((tipo) => {
                   const Icon = tipo.icon;
                   return (
                     <button
                       key={tipo.id}
-                      onClick={() => setTipoRegistro(tipo.id as any)}
+                      onClick={() => {
+                        if (tipo.id === "variancia") {
+                          setMostrarAnalisisVariancia(true);
+                        } else {
+                          setTipoRegistro(tipo.id as any);
+                        }
+                      }}
                       className={`px-4 py-2 rounded-2xl border font-semibold text-sm transition inline-flex items-center gap-2 ${
                         tipoRegistro === tipo.id
                           ? "bg-blue-50 border-blue-300 text-blue-700"
@@ -2271,6 +2610,14 @@ export default function AdminCostosPage() {
             {tipoRegistro === "entrada" && (
               <CostsCard title="Registrar Entrada Inicial" subtitle="Agrega una nueva cantidad de materia prima recibida">
                 <div className="space-y-4">
+                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-xs text-blue-900">
+                    <div className="font-semibold mb-1 flex items-center gap-2">
+                      <Info size={16} />
+                      Información
+                    </div>
+                    <p>Registra cada vez que recibes materia prima del proveedor. Especifica la cantidad, estado (cruda, cocida, etc.), costo y lote. Esto actualiza tu inventario disponible.</p>
+                  </div>
+
                   <FormSelect
                     label="Materia Prima"
                     value={selectedMaterial}
@@ -2349,6 +2696,14 @@ export default function AdminCostosPage() {
                 subtitle="Registra cambios de estado (Ej: cruda → cocinada)"
               >
                 <div className="space-y-4">
+                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-xs text-blue-900">
+                    <div className="font-semibold mb-1 flex items-center gap-2">
+                      <Info size={16} />
+                      Información
+                    </div>
+                    <p>Registra cuando transformas materia prima de un estado a otro. Por ejemplo: cambiar carne cruda a cocida, papa pelada a cortada. Especifica cantidades entrada/salida (puede haber pérdida por procesamiento).</p>
+                  </div>
+
                   <FormSelect
                     label="Materia Prima"
                     value={transformMaterial}
@@ -2430,11 +2785,12 @@ export default function AdminCostosPage() {
             {tipoRegistro === "merma" && (
               <CostsCard title="Registrar Merma Adicional" subtitle="Registra pérdidas no esperadas (daño, desperdicio, etc.)">
                 <div className="space-y-4">
-                  <div className="bg-blue-50 border border-blue-200 rounded-2xl p-3">
-                    <p className="text-sm text-blue-700">
-                      <strong>Nota:</strong> Esto descuenta cantidad del inventario. Usa esto para ajustar cuando se pierde producto
-                      durante la producción.
-                    </p>
+                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-xs text-blue-900">
+                    <div className="font-semibold mb-1 flex items-center gap-2">
+                      <Info size={16} />
+                      Información
+                    </div>
+                    <p>Registra pérdidas inesperadas de materia prima (daño, desperdicio, rotura, etc.). Especifica qué materia prima, en qué estado y cuánta cantidad se perdió. Esto descuenta automáticamente del inventario.</p>
                   </div>
 
                   <FormSelect
@@ -2484,44 +2840,6 @@ export default function AdminCostosPage() {
             )}
 
             {/* PRODUCCIÓN */}
-            {tipoRegistro === "produccion" && (
-              <CostsCard title="Registrar Producción" subtitle="Registra cuántos productos se hicieron">
-                <div className="space-y-4">
-                  <FormSelect
-                    label="Producto"
-                    value={produceProduct}
-                    onChange={setProduceProduct}
-                    options={products.map((p) => ({ value: p.id, label: p.name }))}
-                    disabled={savingProduce}
-                  />
-
-                  <FormInput
-                    label="Cantidad Producida"
-                    value={produceQty}
-                    onChange={setProduceQty}
-                    type="number"
-                    placeholder="0"
-                    disabled={savingProduce}
-                  />
-
-                  <FormInput
-                    label="Observaciones (opcional)"
-                    value={produceObservations}
-                    onChange={setProduceObservations}
-                    placeholder="Notas sobre esta producción..."
-                    disabled={savingProduce}
-                  />
-
-                  <button
-                    className="btn btn-primary w-full"
-                    onClick={registrarProduccion}
-                    disabled={savingProduce}
-                  >
-                    {savingProduce ? "Registrando..." : "Registrar Producción"}
-                  </button>
-                </div>
-              </CostsCard>
-            )}
           </div>
         )}
 
@@ -2546,6 +2864,20 @@ export default function AdminCostosPage() {
                 </div>
                 <div className="text-xs font-semibold mt-1">Sin Ingredientes</div>
               </div>
+            </div>
+
+            {/* Guía de uso */}
+            <div className="bg-blue-100 border border-blue-300 rounded-lg p-4 text-sm text-blue-900">
+              <div className="font-semibold mb-2 flex items-center gap-2">
+                <Info size={18} />
+                Como usar esta sección
+              </div>
+              <ol className="list-decimal list-inside space-y-1 text-xs">
+                <li>Crea un nuevo producto usando el botón "Crear Producto"</li>
+                <li>Agrega ingredientes al producto (pueden ser materias primas u otros productos)</li>
+                <li>Define la cantidad de cada ingrediente que necesitas por unidad producida</li>
+                <li>Usa estos productos para registrar producción y analizar variancia</li>
+              </ol>
             </div>
 
             {/* Búsqueda y filtros */}
@@ -2786,7 +3118,7 @@ export default function AdminCostosPage() {
                                     <span className="mx-1">•</span>
                                     <Badge
                                       label={ing.ingredient_type === "RAW_MATERIAL" ? "Materia Prima" : "Producto"}
-                                      color={ing.ingredient_type === "RAW_MATERIAL" ? "blue" : "purple"}
+                                      color={ing.ingredient_type === "RAW_MATERIAL" ? "blue" : "red"}
                                       size="sm"
                                     />
                                   </div>
@@ -2864,6 +3196,14 @@ export default function AdminCostosPage() {
             >
               {!analisisResults ? (
                 <div className="space-y-4">
+                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-xs text-blue-900">
+                    <div className="font-semibold mb-1 flex items-center gap-2">
+                      <Info size={16} />
+                      Información
+                    </div>
+                    <p>Ingresa la cantidad que deseas producir y te mostraré cuántas unidades realmente puedes hacer basado en tu stock disponible. Identifica qué ingrediente es el cuello de botella.</p>
+                  </div>
+
                   <FormInput
                     label="¿Cuántos productos quieres producir?"
                     value={analisisQty}
@@ -2871,11 +3211,6 @@ export default function AdminCostosPage() {
                     type="number"
                     placeholder="100"
                   />
-                  <div className="bg-blue-50 border border-blue-200 rounded-2xl p-3">
-                    <p className="text-xs text-blue-700">
-                      Ingresa la cantidad y te mostraré cuántos puedes hacer realmente basado en tu stock actual.
-                    </p>
-                  </div>
                 </div>
               ) : (
                 <div className="space-y-4">
@@ -2994,6 +3329,14 @@ export default function AdminCostosPage() {
                 },
               ]}
             >
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-xs text-blue-900 mb-4">
+                <div className="font-semibold mb-1 flex items-center gap-2">
+                  <Info size={16} />
+                  Información
+                </div>
+                <p>Crea un nuevo producto (fórmula). Luego agregarás los ingredientes que necesita. Puedes usar materias primas u otros productos.</p>
+              </div>
+
               <FormInput
                 label="Nombre del Producto"
                 value={newFormulaName}
@@ -3045,6 +3388,14 @@ export default function AdminCostosPage() {
                 },
               ]}
             >
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-xs text-blue-900 mb-4">
+                <div className="font-semibold mb-1 flex items-center gap-2">
+                  <Info size={16} />
+                  Información
+                </div>
+                <p>Agrega ingredientes a este producto. Selecciona si es una materia prima o un producto anidado, luego indica la cantidad que necesitas por unidad producida.</p>
+              </div>
+
               <FormSelect
                 label="Tipo de Ingrediente"
                 value={ingredientType}
@@ -3111,13 +3462,20 @@ export default function AdminCostosPage() {
             setEditingIngredientQty("");
           }}
         >
+          <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-xs text-blue-900 mb-4">
+            <div className="font-semibold mb-1 flex items-center gap-2">
+              <Info size={16} />
+              Información
+            </div>
+            <p>Modifica la cantidad de este ingrediente que necesitas. El cambio se aplicará a todos los cálculos futuros.</p>
+          </div>
+
           <div className="space-y-4">
             <FormInput
               label="Nueva Cantidad"
               value={editingIngredientQty}
               onChange={setEditingIngredientQty}
               type="number"
-              step="0.01"
               placeholder="0"
               disabled={savingEditIngredient}
             />
@@ -3142,6 +3500,14 @@ export default function AdminCostosPage() {
             setDuplicatingProductName("");
           }}
         >
+          <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-xs text-blue-900 mb-4">
+            <div className="font-semibold mb-1 flex items-center gap-2">
+              <Info size={16} />
+              Información
+            </div>
+            <p>Crea una copia de este producto con todos sus ingredientes. Ideal para crear variantes similares rápidamente.</p>
+          </div>
+
           <div className="space-y-4">
             <FormInput
               label="Nombre del Nuevo Producto"
@@ -3171,6 +3537,14 @@ export default function AdminCostosPage() {
           }}
         >
           <div className="space-y-4">
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-xs text-blue-900">
+              <div className="font-semibold mb-1 flex items-center gap-2">
+                <Info size={16} />
+                Información
+              </div>
+              <p>Aquí ves todos los movimientos de esta materia prima. Cada fila muestra la fecha, tipo de movimiento, cantidad antes y después. Úsalo para auditar y entender los cambios de inventario.</p>
+            </div>
+
             {loadingHistorial ? (
               <p className="text-gray-500">Cargando historial...</p>
             ) : historialMateria.length === 0 ? (
@@ -3217,6 +3591,14 @@ export default function AdminCostosPage() {
           }}
         >
           <div className="space-y-4">
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-xs text-blue-900">
+              <div className="font-semibold mb-1 flex items-center gap-2">
+                <Info size={16} />
+                Información
+              </div>
+              <p>Aquí ves todos los cambios realizados a este producto/fórmula. Incluye creación, ingredientes agregados, modificados o eliminados. Úsalo para auditar la evolución de tus fórmulas.</p>
+            </div>
+
             {loadingHistorial ? (
               <p className="text-gray-500">Cargando historial...</p>
             ) : historialFormula.length === 0 ? (
@@ -3247,9 +3629,201 @@ export default function AdminCostosPage() {
           </div>
         </CostsModal>
 
+        {/* MODAL: Análisis de Variancia */}
+        <CostsModal
+          isOpen={mostrarAnalisisVariancia}
+          title="Análisis de Variancia de Producción"
+          maxWidth="2xl"
+          onClose={() => {
+            setMostrarAnalisisVariancia(false);
+            setProductoAnalisis("");
+            setRealAnalisis("");
+            setIngredientesReales({});
+            setVarianciaCalculada(null);
+          }}
+        >
+          <div className="space-y-6">
+            {/* Guía inicial */}
+            <div className="bg-blue-100 border border-blue-300 rounded-lg p-3 text-sm text-blue-900">
+              <div className="font-semibold mb-1">📋 Cómo usar este análisis:</div>
+              <ol className="list-decimal list-inside space-y-1 text-xs">
+                <li>Selecciona el producto que produciste</li>
+                <li>Ingresa la cantidad que produjiste (cantidad real)</li>
+                <li>Ingresa cuánto de cada ingrediente usaste realmente</li>
+                <li>Registra para guardar el análisis</li>
+              </ol>
+            </div>
+
+            {/* Selector de producto */}
+            <div>
+              <label className="flex items-center gap-2 text-sm font-semibold text-gray-700 mb-2">
+                Selecciona Producto
+                <Tooltip text="Elige el producto que quieres analizar. Si tiene ingredientes anidados (productos dentro de productos), verás el desglose completo." />
+              </label>
+              <FormSelect
+                label=""
+                value={productoAnalisis}
+                onChange={(val) => {
+                  setProductoAnalisis(val);
+                  setVarianciaCalculada(null);
+                }}
+                options={
+                  formulas.length === 0
+                    ? [{ value: "", label: "Cargando productos..." }]
+                    : formulas.map((f) => ({ value: f.id, label: f.name }))
+                }
+              />
+            </div>
+
+            {/* Si hay producto seleccionado, mostrar guía y máximo */}
+            {productoAnalisis && !varianciaCalculada && (
+              <>
+                <div className="bg-blue-50 rounded-2xl p-4 border border-blue-200 space-y-3">
+                  <div className="flex items-center gap-2">
+                    <div className="font-semibold text-blue-900">CAPACIDAD MÁXIMA</div>
+                    <Tooltip text="Es la cantidad máxima de este producto que puedes hacer con el stock disponible. Se basa en el ingrediente que escasea (cuello de botella)." />
+                  </div>
+                  <div className="text-2xl font-bold text-blue-700">
+                    Máximo: {calcularMaximoProducible(productoAnalisis)} unidades
+                  </div>
+                </div>
+
+                <div className="bg-green-100 border border-green-300 rounded-lg p-3 text-sm text-green-900">
+                  <div className="font-semibold">✓ Ahora ingresa la cantidad real que produjiste</div>
+                </div>
+              </>
+            )}
+
+            {/* Input cantidad real */}
+            <div>
+              <label className="flex items-center gap-2 text-sm font-semibold text-gray-700 mb-2">
+                Cantidad Real Producida
+                <Tooltip text="Ingresa exactamente cuántas unidades del producto lograste producir." />
+              </label>
+              <FormInput
+                label=""
+                type="number"
+                value={realAnalisis}
+                onChange={(val) => {
+                  setRealAnalisis(val);
+                  if (val && productoAnalisis) {
+                    calcularVariancia(productoAnalisis, parseInt(val));
+                  }
+                }}
+                placeholder={`Máximo: ${calcularMaximoProducible(productoAnalisis)} unidades`}
+              />
+            </div>
+
+            {/* Si hay variancia calculada, mostrar árbol de ingredientes y inputs */}
+            {varianciaCalculada && (
+              <>
+                {/* Árbol de ingredientes */}
+                <div className="bg-green-50 rounded-2xl p-4 border border-green-200 space-y-3">
+                  <div className="flex items-center gap-2 mb-3">
+                    <div className="font-semibold text-green-900">🌳 DESGLOSE DE INGREDIENTES</div>
+                    <Tooltip text="Aquí ves todos los ingredientes que necesitas (planeados) y cuánto realmente usaste. Verde = menos de lo planeado (ahorro), Rojo = más de lo planeado (desperdicio)." />
+                  </div>
+                  <div className="text-xs text-gray-700 bg-white bg-opacity-50 rounded p-2 mb-3">
+                    <strong>Nota:</strong> La estructura muestra ingredientes en cascada. Productos con 📦 contienen otros ingredientes dentro.
+                  </div>
+                  <div className="space-y-0 border border-gray-200 rounded-lg overflow-hidden">
+                    {construirArbolIngredientes(productoAnalisis, parseInt(realAnalisis))}
+                  </div>
+                </div>
+
+                {/* Inputs de cantidad real */}
+                <div className="bg-amber-50 rounded-2xl p-4 border border-amber-200 space-y-3">
+                  <div className="flex items-center gap-2 mb-3">
+                    <div className="font-semibold text-amber-900">📝 INGREDIENTES USADOS</div>
+                    <Tooltip text="Ingresa la cantidad REAL de cada ingrediente que usaste. El sistema comparará con lo planeado para calcular la variancia." />
+                  </div>
+                  <div className="text-xs text-gray-700 bg-white bg-opacity-50 rounded p-2 mb-3">
+                    ⬇️ <strong>Completa estos campos</strong> con los valores reales que usaste de cada ingrediente. Si no ingresamos valores, usaremos los valores teóricos.
+                  </div>
+                  <div className="space-y-2">
+                    {Object.entries(varianciaCalculada.ingredientes).map(
+                      ([ingId, ingData]: [string, any]) => (
+                        <div key={ingId}>
+                          <label className="text-xs font-semibold text-gray-600 uppercase flex items-center gap-2">
+                            {ingData.name}
+                            <span className="font-normal text-gray-500">(Teórico: {ingData.planned.toFixed(2)} {ingData.unit})</span>
+                          </label>
+                          <input
+                            type="number"
+                            step="0.01"
+                            value={ingredientesReales[ingId] || ""}
+                            onChange={(e) =>
+                              setIngredientesReales({
+                                ...ingredientesReales,
+                                [ingId]: e.target.value,
+                              })
+                            }
+                            placeholder={`${ingData.planned.toFixed(2)} ${ingData.unit}`}
+                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                          />
+                        </div>
+                      )
+                    )}
+                  </div>
+                </div>
+
+                {/* Mostrar resumen de variancia */}
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <div className="text-sm font-semibold text-gray-700">RESULTADO DE VARIANCIA</div>
+                    <Tooltip text="Positivo (%) = Produjiste MÁS de lo máximo posible (revisa ingredientes). Negativo (%) = Produjiste MENOS de lo máximo (ahorro)." />
+                  </div>
+                  <div
+                    className={`p-4 rounded-lg ${
+                      varianciaCalculada.porcentaje_variancia > 0
+                        ? "bg-red-50 border border-red-200"
+                        : "bg-green-50 border border-green-200"
+                    }`}
+                  >
+                    <div className="text-sm mb-2">
+                      {varianciaCalculada.real}/{varianciaCalculada.teórico} = <span className="font-bold text-lg">{varianciaCalculada.porcentaje_variancia}%</span>
+                    </div>
+                    <div className="text-xs text-gray-700">
+                      {varianciaCalculada.porcentaje_variancia > 0
+                        ? "⚠️ Variancia POSITIVA: Usaste más ingredientes de lo planeado"
+                        : varianciaCalculada.porcentaje_variancia < 0
+                        ? "✓ Variancia NEGATIVA: Ahorro en ingredientes"
+                        : "= Variancia CERO: Exactamente como se planeó"}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Botón registrar */}
+                <button
+                  className="btn btn-primary w-full"
+                  onClick={registrarVariancia}
+                  disabled={savingVariancia}
+                >
+                  {savingVariancia ? "Guardando..." : "✓ Registrar Variancia"}
+                </button>
+              </>
+            )}
+          </div>
+        </CostsModal>
+
         {/* ────── TAB: REPORTES ────── */}
         {activeTab === "reportes" && (
           <div className="space-y-6">
+            {/* Guía de uso */}
+            <div className="bg-blue-100 border border-blue-300 rounded-lg p-4 text-sm text-blue-900">
+              <div className="font-semibold mb-2 flex items-center gap-2">
+                <Info size={18} />
+                Como usar esta sección
+              </div>
+              <ol className="list-decimal list-inside space-y-1 text-xs">
+                <li>Selecciona una pestaña para ver un tipo de análisis diferente</li>
+                <li>Resumen: Vista general de merma y producción</li>
+                <li>Merma: Detalle de todas las pérdidas registradas</li>
+                <li>Producción: Historial de productos fabricados</li>
+                <li>Variancia: Análisis de diferencias entre lo planeado y lo real</li>
+              </ol>
+            </div>
+
             {/* Sub-tabs de Reportes */}
             <div className="flex gap-2 border-b border-gray-200 pb-4">
               <button
@@ -3296,6 +3870,21 @@ export default function AdminCostosPage() {
                 }}
               >
                 🏭 Producción
+              </button>
+              <button
+                className={`px-4 py-2 rounded-lg font-medium transition ${
+                  reportesTab === "variancia"
+                    ? "bg-blue-100 text-blue-700"
+                    : "text-gray-600 hover:bg-gray-100"
+                }`}
+                onClick={() => {
+                  setReportesTab("variancia");
+                  if (dataProduccion.length === 0) {
+                    cargarReportes();
+                  }
+                }}
+              >
+                📈 Variancia
               </button>
             </div>
 
@@ -3459,12 +4048,112 @@ export default function AdminCostosPage() {
                 )}
               </div>
             )}
+
+            {/* VARIANCIA */}
+            {reportesTab === "variancia" && (
+              <div className="space-y-6">
+                <h3 className="text-xl font-bold text-gray-900">Análisis de Variancia</h3>
+
+                {loadingReportes ? (
+                  <p className="text-gray-500">Cargando datos...</p>
+                ) : dataVariancia.length === 0 ? (
+                  <div className="text-center py-8 text-gray-500">
+                    No hay registros de variancia aún. Comienza en tab Producción → "Analizar Variancia"
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {dataVariancia.map((item: any) => (
+                      <div
+                        key={item.id}
+                        className={`rounded-2xl border p-4 ${
+                          item.variance_percentage > 0
+                            ? "bg-red-50 border-red-200"
+                            : item.variance_percentage < -5
+                            ? "bg-green-50 border-green-200"
+                            : "bg-blue-50 border-blue-200"
+                        }`}
+                      >
+                        {/* Header */}
+                        <div className="flex justify-between items-start mb-3">
+                          <div>
+                            <div className="font-bold text-gray-900">
+                              {item.product_name}
+                            </div>
+                            <div className="text-xs text-gray-600 mt-1">
+                              {item.fecha} {item.hora}
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <div className="text-2xl font-bold">
+                              {item.variance_percentage > 0 ? "+" : ""}
+                              {item.variance_percentage}%
+                            </div>
+                            <div className="text-xs text-gray-600">
+                              {item.quantity_real}/{item.quantity_planned} unidades
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Variancia por ingrediente */}
+                        {item.ingredients_variance && (
+                          <div className="mt-3 pt-3 border-t border-gray-300/30">
+                            <div className="text-xs font-semibold text-gray-700 mb-2">
+                              Ingredientes:
+                            </div>
+                            <div className="space-y-1">
+                              {Object.entries(item.ingredients_variance).map(
+                                ([ingId, ingData]: [string, any]) => (
+                                  <div
+                                    key={ingId}
+                                    className="flex justify-between items-center text-xs bg-white/50 rounded px-2 py-1"
+                                  >
+                                    <div className="font-medium">{ingData.name}</div>
+                                    <div className="text-right">
+                                      <div className="font-semibold">
+                                        {ingData.real.toFixed(2)} / {ingData.planned.toFixed(2)} {ingData.unit}
+                                      </div>
+                                      <div
+                                        className={`text-xs font-bold ${
+                                          parseFloat(ingData.variance_percentage) > 0
+                                            ? "text-red-600"
+                                            : "text-green-600"
+                                        }`}
+                                      >
+                                        {parseFloat(ingData.variance_percentage) > 0 ? "+" : ""}
+                                        {ingData.variance_percentage}%
+                                      </div>
+                                    </div>
+                                  </div>
+                                )
+                              )}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
-
-        {/* ────── TAB: ALERTAS ────── */}
         {activeTab === "alertas" && (
           <div className="space-y-6">
+            {/* Guía de uso */}
+            <div className="bg-blue-100 border border-blue-300 rounded-lg p-4 text-sm text-blue-900">
+              <div className="font-semibold mb-2 flex items-center gap-2">
+                <Info size={18} />
+                Como usar esta sección
+              </div>
+              <ol className="list-decimal list-inside space-y-1 text-xs">
+                <li>Las alertas se generan automáticamente según el estado del sistema</li>
+                <li>Alertas rojo/críticas: Requieren atención inmediata (stock bajo, errores)</li>
+                <li>Alertas amarillo/advertencia: Requieren revisión pronta</li>
+                <li>Usa el botón "Recargar" para actualizar el estado de las alertas</li>
+                <li>Marca alertas como leídas para mantener el sistema limpio</li>
+              </ol>
+            </div>
+
             {/* Encabezado con botón cargar */}
             <div className="flex justify-between items-center">
               <h3 className="text-xl font-bold text-gray-900">
@@ -3629,6 +4318,14 @@ export default function AdminCostosPage() {
           },
         ]}
       >
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-xs text-blue-900 mb-4">
+          <div className="font-semibold mb-1 flex items-center gap-2">
+            <Info size={16} />
+            Información
+          </div>
+          <p>Crea una nueva materia prima que necesitas para producir. Luego podrás registrar su inventario y estados.</p>
+        </div>
+
         <FormInput
           label="Nombre"
           value={newMaterialName}
@@ -3695,6 +4392,14 @@ export default function AdminCostosPage() {
           },
         ]}
       >
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-xs text-blue-900 mb-4">
+          <div className="font-semibold mb-1 flex items-center gap-2">
+            <Info size={16} />
+            Información
+          </div>
+          <p>Crea nuevos estados para una materia prima. Por ejemplo: Cruda, Cocida, Molida. Podrás registrar inventario en cada estado.</p>
+        </div>
+
         <FormInput
           label="Nombre del Estado"
           value={newStateName}
@@ -3736,6 +4441,14 @@ export default function AdminCostosPage() {
           },
         ]}
       >
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-xs text-blue-900 mb-4">
+          <div className="font-semibold mb-1 flex items-center gap-2">
+            <Info size={16} />
+            Información
+          </div>
+          <p>Modifica los detalles básicos de esta materia prima. Los cambios se aplican a todos los registros existentes.</p>
+        </div>
+
         <FormInput
           label="Nombre"
           value={editMaterialName}
@@ -3789,6 +4502,14 @@ export default function AdminCostosPage() {
           },
         ]}
       >
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-xs text-blue-900 mb-4">
+          <div className="font-semibold mb-1 flex items-center gap-2">
+            <Info size={16} />
+            Información
+          </div>
+          <p>Modifica el nombre de este estado. El cambio se aplicará a todos los registros que usan este estado.</p>
+        </div>
+
         <FormInput
           label="Nombre del Estado"
           value={editStateName}
