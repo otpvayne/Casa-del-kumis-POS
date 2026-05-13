@@ -1004,18 +1004,22 @@ export default function AdminCostosPage() {
       }
 
       // Actualizar inventario agregado (raw_material_inventory)
+      const inventoryUpdateErrors: string[] = [];
       for (const { rawMaterialId, stateId, qty } of Object.values(inventoryDeductions)) {
         console.log(`Descontando inventario: material=${rawMaterialId}, state=${stateId}, qty=${qty}`);
 
         const { data: invData, error: invError } = await supabase
           .from("raw_material_inventory")
-          .select("id, quantity")
+          .select("id, quantity, plant_id")
           .eq("raw_material_id", rawMaterialId)
           .eq("state_id", stateId)
+          .eq("plant_id", selectedPlantId)
           .limit(1);
 
         if (invError) {
-          console.error(`Error consultando inventario: ${invError.message}`);
+          const msg = `Error consultando inventario (mat=${rawMaterialId}, state=${stateId}): ${invError.message}`;
+          console.error(msg);
+          inventoryUpdateErrors.push(msg);
           continue;
         }
 
@@ -1030,11 +1034,34 @@ export default function AdminCostosPage() {
             .eq("id", inv.id);
 
           if (updateError) {
-            console.error(`Error actualizando inventario: ${updateError.message}`);
+            const msg = `Error actualizando inventario ID ${inv.id}: ${updateError.message}`;
+            console.error(msg);
+            inventoryUpdateErrors.push(msg);
+          } else {
+            // Verify the update actually happened
+            const { data: verifyData } = await supabase
+              .from("raw_material_inventory")
+              .select("quantity")
+              .eq("id", inv.id)
+              .single();
+
+            if (verifyData && verifyData.quantity === newQty) {
+              console.log(`✓ Inventario actualizado correctamente a ${newQty}`);
+            } else {
+              const msg = `Inventario no se actualizó. ID ${inv.id}: esperado=${newQty}, actual=${verifyData?.quantity || 'desconocido'}`;
+              console.warn(msg);
+              inventoryUpdateErrors.push(msg);
+            }
           }
         } else {
-          console.warn(`No se encontró inventario para material=${rawMaterialId}, state=${stateId}`);
+          const msg = `No se encontró inventario para material=${rawMaterialId}, state=${stateId}`;
+          console.warn(msg);
+          inventoryUpdateErrors.push(msg);
         }
+      }
+
+      if (inventoryUpdateErrors.length > 0) {
+        console.error("Errores al descontar inventario:", inventoryUpdateErrors);
       }
 
       // 3. Recargar datos actualizados
