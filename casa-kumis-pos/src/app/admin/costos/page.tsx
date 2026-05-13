@@ -761,7 +761,9 @@ export default function AdminCostosPage() {
     // Para ingredientes de nivel 0, buscar directamente
     if (flatIngredient.level === 0) {
       const ing = selectedFormula.ingredients.find((i) => i.ingredient_id === flatIngredient.parentId);
-      return ing?.quantity || 0;
+      const result = ing?.quantity || 0;
+      console.log(`getRequiredQuantity(${flatIngredient.name}, level=0) = ${result}`);
+      return result;
     }
 
     // Para ingredientes anidados, recurrir en la estructura
