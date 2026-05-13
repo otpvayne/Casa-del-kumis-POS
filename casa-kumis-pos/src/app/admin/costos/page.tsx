@@ -4902,8 +4902,13 @@ export default function AdminCostosPage() {
                                           const required = getRequiredQuantity(ing) * (parseFloat(cantidadProducida) || 0);
                                           const unit = batches.find((b) => b.id === ingredienteLotes[ing.id][0]?.batchId)?.unit || "unidad";
                                           const percentage = required > 0 ? (total / required) * 100 : 0;
-                                          const isExcess = floatComparison.isGreaterThan(total, required);
-                                          const isComplete = floatComparison.isGreaterOrEqual(total, required);
+
+                                          // Limpiar errores de precisión flotante: redondear a 2 decimales (como se muestran en UI)
+                                          const totalCleaned = parseFloat(total.toFixed(2));
+                                          const requiredCleaned = parseFloat(required.toFixed(2));
+
+                                          const isExcess = totalCleaned > requiredCleaned;
+                                          const isComplete = totalCleaned >= requiredCleaned;
 
                                           return (
                                             <div className="border-t border-blue-200 pt-2 space-y-2">
