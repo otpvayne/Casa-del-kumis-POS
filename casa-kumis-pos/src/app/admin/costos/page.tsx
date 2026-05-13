@@ -798,7 +798,6 @@ export default function AdminCostosPage() {
       const currentIng = currentIngredients.find((ing) => ing.ingredient_id === currentId);
 
       if (!currentIng) {
-        console.warn(`getTotalRequiredQuantity: No encontrado ${currentId}`, { flatIngredient, parts });
         return 0;
       }
 
@@ -813,7 +812,6 @@ export default function AdminCostosPage() {
       }
     }
 
-    console.log(`getTotalRequiredQuantity(${flatIngredient.id}, qty=${quantity}) = ${totalQty} | name=${flatIngredient.name}`);
     return totalQty;
   };
 
