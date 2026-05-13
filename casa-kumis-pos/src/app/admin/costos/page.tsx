@@ -783,6 +783,17 @@ export default function AdminCostosPage() {
     return totalMultiplier;
   };
 
+  // Comparación tolerante de números flotantes (para evitar errores de precisión)
+  const FLOAT_TOLERANCE = 0.000001; // Tolerancia muy pequeña (0.0001%)
+  const floatComparison = {
+    isEqual: (a: number, b: number, tolerance = FLOAT_TOLERANCE) =>
+      Math.abs(a - b) <= tolerance,
+    isGreaterThan: (a: number, b: number, tolerance = FLOAT_TOLERANCE) =>
+      a > b + tolerance,
+    isGreaterOrEqual: (a: number, b: number, tolerance = FLOAT_TOLERANCE) =>
+      a >= b - tolerance,
+  };
+
   // CALCULAR VARIANCIA DE COSTOS
   const calcularVarianciaCostos = async () => {
     if (!productoVariancia || !cantidadProducida) {
@@ -4891,8 +4902,8 @@ export default function AdminCostosPage() {
                                           const required = getRequiredQuantity(ing) * (parseFloat(cantidadProducida) || 0);
                                           const unit = batches.find((b) => b.id === ingredienteLotes[ing.id][0]?.batchId)?.unit || "unidad";
                                           const percentage = required > 0 ? (total / required) * 100 : 0;
-                                          const isExcess = total > required;
-                                          const isComplete = total >= required;
+                                          const isExcess = floatComparison.isGreaterThan(total, required);
+                                          const isComplete = floatComparison.isGreaterOrEqual(total, required);
 
                                           return (
                                             <div className="border-t border-blue-200 pt-2 space-y-2">
@@ -5000,7 +5011,8 @@ export default function AdminCostosPage() {
                                               const numValue = parseFloat(normalized);
                                               if (!isNaN(numValue)) {
                                                 const updated = [...ingredienteLotes[ing.id]];
-                                                updated[lastIdx].quantity = numValue;
+                                                // Redondear a 4 decimales para evitar errores de precisión de punto flotante
+                                                updated[lastIdx].quantity = Math.round(numValue * 10000) / 10000;
                                                 setIngredienteLotes({ ...ingredienteLotes, [ing.id]: updated });
                                               }
                                             }}
