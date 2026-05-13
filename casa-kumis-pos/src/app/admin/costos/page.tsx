@@ -1005,18 +1005,35 @@ export default function AdminCostosPage() {
 
       // Actualizar inventario agregado (raw_material_inventory)
       for (const { rawMaterialId, stateId, qty } of Object.values(inventoryDeductions)) {
-        const { data: invData } = await supabase
+        console.log(`Descontando inventario: material=${rawMaterialId}, state=${stateId}, qty=${qty}`);
+
+        const { data: invData, error: invError } = await supabase
           .from("raw_material_inventory")
           .select("id, quantity")
           .eq("raw_material_id", rawMaterialId)
           .eq("state_id", stateId)
-          .single();
+          .limit(1);
 
-        if (invData) {
-          await supabase
+        if (invError) {
+          console.error(`Error consultando inventario: ${invError.message}`);
+          continue;
+        }
+
+        if (invData && invData.length > 0) {
+          const inv = invData[0];
+          const newQty = Math.max(0, (inv.quantity || 0) - qty);
+          console.log(`Actualizando inventario ID ${inv.id}: ${inv.quantity} - ${qty} = ${newQty}`);
+
+          const { error: updateError } = await supabase
             .from("raw_material_inventory")
-            .update({ quantity: Math.max(0, (invData.quantity || 0) - qty) })
-            .eq("id", invData.id);
+            .update({ quantity: newQty })
+            .eq("id", inv.id);
+
+          if (updateError) {
+            console.error(`Error actualizando inventario: ${updateError.message}`);
+          }
+        } else {
+          console.warn(`No se encontró inventario para material=${rawMaterialId}, state=${stateId}`);
         }
       }
 
@@ -4795,7 +4812,7 @@ export default function AdminCostosPage() {
                                         </span>
                                       )}
                                       <span className="text-xs text-gray-500 ml-2">
-                                        ({getRequiredQuantity(ing)} {batches.find((b) => b.id === ingredienteLotes[ing.id]?.[0]?.batchId)?.unit || "unidad"} requerido)
+                                        ({(getRequiredQuantity(ing) * (parseFloat(cantidadProducida) || 0)).toFixed(2)} {batches.find((b) => b.id === ingredienteLotes[ing.id]?.[0]?.batchId)?.unit || "unidad"} requerido)
                                       </span>
                                     </label>
 
@@ -4844,7 +4861,7 @@ export default function AdminCostosPage() {
                                         })}
                                         {(() => {
                                           const total = ingredienteLotes[ing.id].reduce((sum, s) => sum + s.quantity, 0);
-                                          const required = getRequiredQuantity(ing);
+                                          const required = getRequiredQuantity(ing) * (parseFloat(cantidadProducida) || 0);
                                           const unit = batches.find((b) => b.id === ingredienteLotes[ing.id][0]?.batchId)?.unit || "unidad";
                                           const percentage = required > 0 ? (total / required) * 100 : 0;
                                           const isExcess = total > required;
