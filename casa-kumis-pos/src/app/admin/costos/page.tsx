@@ -826,7 +826,12 @@ export default function AdminCostosPage() {
 
       // Validar que no se exceda la cantidad requerida
       const required = getRequiredQuantity(ingredient) * (parseFloat(cantidadProducida) || 0);
-      if (totalQty > required) {
+
+      // Limpiar errores de precisión flotante: redondear a 2 decimales antes de comparar
+      const totalQtyCleaned = parseFloat(totalQty.toFixed(2));
+      const requiredCleaned = parseFloat(required.toFixed(2));
+
+      if (totalQtyCleaned > requiredCleaned) {
         setErr(
           `${ingredient.name}: ${totalQty.toFixed(2)} excede lo requerido (${required.toFixed(2)}). ` +
             `Por favor reduce la cantidad.`
