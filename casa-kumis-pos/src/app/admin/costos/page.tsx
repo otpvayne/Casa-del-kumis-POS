@@ -794,9 +794,14 @@ export default function AdminCostosPage() {
 
     // Recorrer toda la cadena de padres y multiplicar cantidades
     for (let i = 0; i < parts.length; i++) {
-      const currentId = parts[i];
-      const currentIng = currentIngredients.find((ing) => ing.ingredient_id === currentId);
+      const currentIdx = parseInt(parts[i], 10);
 
+      // Validar que el índice sea válido
+      if (isNaN(currentIdx) || currentIdx < 0 || currentIdx >= currentIngredients.length) {
+        return 0;
+      }
+
+      const currentIng = currentIngredients[currentIdx];
       if (!currentIng) return 0;
 
       totalMultiplier *= currentIng.quantity || 0;
