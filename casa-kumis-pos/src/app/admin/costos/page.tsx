@@ -872,11 +872,16 @@ export default function AdminCostosPage() {
       const batchSelections: Record<string, string> = {};
       const virtualBatches: Record<string, MaterialBatch> = {};
 
+      // Mapeo de flatId -> batchId para mantener lotes separados por bloque
+      const batchSelectionsByFlatId: Record<string, string> = {};
+
       Object.entries(ingredienteLotes).forEach(([flatId, selections]) => {
         const originalId = getOriginalIngredientId(flatId);
 
         if (selections.length === 1) {
-          // Un solo lote: usar directamente
+          // Un solo lote: usar directamente, almacenado por flatId
+          batchSelectionsByFlatId[flatId] = selections[0].batchId;
+          // También guardar por originalId para compatibilidad con calculateProductCost
           batchSelections[originalId] = selections[0].batchId;
         } else {
           // Múltiples lotes: crear lote virtual con costo promedio ponderado
@@ -893,7 +898,8 @@ export default function AdminCostosPage() {
 
           const weightedCostPerUnit = totalQty > 0 ? totalCost / totalQty : 0;
 
-          const virtualBatchId = `VIRTUAL-${originalId}`;
+          // Crear lote virtual usando flatId para que sea único por contexto
+          const virtualBatchId = `VIRTUAL-${flatId}`;
           virtualBatches[virtualBatchId] = {
             id: virtualBatchId,
             raw_material_id: originalId,
@@ -905,6 +911,8 @@ export default function AdminCostosPage() {
             lot_code: `Mezcla (${selections.length} lotes)`,
           };
 
+          // Guardar por flatId y por originalId
+          batchSelectionsByFlatId[flatId] = virtualBatchId;
           batchSelections[originalId] = virtualBatchId;
         }
       });
@@ -4906,11 +4914,13 @@ export default function AdminCostosPage() {
                                           const total = ingredienteLotes[ing.id].reduce((sum, s) => sum + s.quantity, 0);
                                           const required = getRequiredQuantity(ing) * (parseFloat(cantidadProducida) || 0);
                                           const unit = batches.find((b) => b.id === ingredienteLotes[ing.id][0]?.batchId)?.unit || "unidad";
-                                          const percentage = required > 0 ? (total / required) * 100 : 0;
 
                                           // Limpiar errores de precisión flotante: redondear a 2 decimales (como se muestran en UI)
                                           const totalCleaned = parseFloat(total.toFixed(2));
                                           const requiredCleaned = parseFloat(required.toFixed(2));
+
+                                          // Calcular porcentaje usando valores redondeados para consistencia
+                                          const percentageRounded = requiredCleaned > 0 ? (totalCleaned / requiredCleaned) * 100 : 0;
 
                                           const isExcess = totalCleaned > requiredCleaned;
                                           const isComplete = totalCleaned >= requiredCleaned;
@@ -4930,7 +4940,7 @@ export default function AdminCostosPage() {
                                                       : "bg-yellow-100 text-yellow-800"
                                                   }`}
                                                 >
-                                                  {isExcess ? "⚠️ Exceso" : isComplete ? "✓ Completo" : `${Math.round(percentage)}%`}
+                                                  {isExcess ? "⚠️ Exceso" : isComplete ? "✓ Completo" : `${Math.round(percentageRounded)}%`}
                                                 </span>
                                               </div>
                                               <div className="w-full bg-gray-200 rounded-full h-2 overflow-hidden">
@@ -4938,7 +4948,7 @@ export default function AdminCostosPage() {
                                                   className={`h-full transition-all ${
                                                     isExcess ? "bg-red-500" : isComplete ? "bg-green-500" : "bg-blue-500"
                                                   }`}
-                                                  style={{ width: `${Math.min(percentage, 100)}%` }}
+                                                  style={{ width: `${Math.min(percentageRounded, 100)}%` }}
                                                 />
                                               </div>
                                               {isExcess && (
@@ -5020,9 +5030,22 @@ export default function AdminCostosPage() {
                                               // Solo actualizar el número cuando sea parseable
                                               const numValue = parseFloat(normalized);
                                               if (!isNaN(numValue)) {
+                                                // Calcular máximo permitido
+                                                const batch = batches.find((b) => b.id === ingredienteLotes[ing.id][lastIdx]?.batchId);
+                                                const qtyInOtherBatches = ingredienteLotes[ing.id]
+                                                  .slice(0, lastIdx)
+                                                  .reduce((sum, sel) => sum + sel.quantity, 0);
+                                                const required = getRequiredQuantity(ing) * (parseFloat(cantidadProducida) || 0);
+                                                const maxByFormula = required - qtyInOtherBatches;
+                                                const maxByBatch = batch?.quantity_out || 0;
+                                                const maxQty = Math.min(maxByFormula, maxByBatch);
+
+                                                // Limitar al máximo permitido
+                                                const finalValue = Math.min(numValue, maxQty);
+
                                                 const updated = [...ingredienteLotes[ing.id]];
                                                 // Redondear a 4 decimales para evitar errores de precisión de punto flotante
-                                                updated[lastIdx].quantity = Math.round(numValue * 10000) / 10000;
+                                                updated[lastIdx].quantity = Math.round(finalValue * 10000) / 10000;
                                                 setIngredienteLotes({ ...ingredienteLotes, [ing.id]: updated });
                                               }
                                             }}
