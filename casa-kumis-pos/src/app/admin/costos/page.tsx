@@ -1034,10 +1034,9 @@ export default function AdminCostosPage() {
 
         const { data: invData, error: invError } = await supabase
           .from("raw_material_inventory")
-          .select("id, quantity, plant_id")
+          .select("id, quantity")
           .eq("raw_material_id", rawMaterialId)
           .eq("state_id", stateId)
-          .eq("plant_id", selectedPlantId)
           .limit(1);
 
         if (invError) {
