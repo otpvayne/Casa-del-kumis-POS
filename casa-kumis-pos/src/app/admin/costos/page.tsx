@@ -758,35 +758,29 @@ export default function AdminCostosPage() {
     const selectedFormula = formulas.find((f) => f.id === productoVariancia);
     if (!selectedFormula) return 0;
 
-    console.log(`[getRequiredQuantity] Called with:`, { name: flatIngredient.name, level: flatIngredient.level, id: flatIngredient.id });
-
-    // Para ingredientes de nivel 0, buscar directamente
-    if (flatIngredient.level === 0) {
-      const ing = selectedFormula.ingredients.find((i) => i.ingredient_id === flatIngredient.parentId);
-      const result = ing?.quantity || 0;
-      console.log(`[getRequiredQuantity] Level 0: ${flatIngredient.name} = ${result}`);
-      return result;
-    }
-
-    // Para ingredientes anidados, recurrir en la estructura
     const parts = flatIngredient.id.split(".");
+    let totalMultiplier = 1;
     let currentIngredients = selectedFormula.ingredients;
 
-    for (let i = 0; i < parts.length - 1; i++) {
-      const parentId = parts[i];
-      const currentIng = currentIngredients.find((ing) => ing.ingredient_id === parentId);
-      if (!currentIng || currentIng.ingredient_type !== "PRODUCT") return 0;
+    // Recorrer cada parte del ID multiplicando cantidades
+    for (let i = 0; i < parts.length; i++) {
+      const currentId = parts[i];
+      const currentIng = currentIngredients.find((ing) => ing.ingredient_id === currentId);
 
-      const subFormula = formulas.find((f) => f.id === currentIng.ingredient_id);
-      if (!subFormula) return 0;
+      if (!currentIng) return 0;
 
-      currentIngredients = subFormula.ingredients;
+      totalMultiplier *= currentIng.quantity || 0;
+
+      // Si no es el último elemento, cargar ingredientes del siguiente nivel
+      if (i < parts.length - 1) {
+        if (currentIng.ingredient_type !== "PRODUCT") return 0;
+        const subFormula = formulas.find((f) => f.id === currentIng.ingredient_id);
+        if (!subFormula) return 0;
+        currentIngredients = subFormula.ingredients;
+      }
     }
 
-    const finalIng = currentIngredients.find((i) => i.ingredient_id === flatIngredient.parentId);
-    const result = finalIng?.quantity || 0;
-    console.log(`[getRequiredQuantity] Nested: ${flatIngredient.name} = ${result}`);
-    return result;
+    return totalMultiplier;
   };
 
   // CALCULAR VARIANCIA DE COSTOS
