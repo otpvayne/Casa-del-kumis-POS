@@ -758,11 +758,13 @@ export default function AdminCostosPage() {
     const selectedFormula = formulas.find((f) => f.id === productoVariancia);
     if (!selectedFormula) return 0;
 
+    console.log(`[getRequiredQuantity] Called with:`, { name: flatIngredient.name, level: flatIngredient.level, id: flatIngredient.id });
+
     // Para ingredientes de nivel 0, buscar directamente
     if (flatIngredient.level === 0) {
       const ing = selectedFormula.ingredients.find((i) => i.ingredient_id === flatIngredient.parentId);
       const result = ing?.quantity || 0;
-      console.log(`getRequiredQuantity(${flatIngredient.name}, level=0) = ${result}`);
+      console.log(`[getRequiredQuantity] Level 0: ${flatIngredient.name} = ${result}`);
       return result;
     }
 
@@ -782,7 +784,9 @@ export default function AdminCostosPage() {
     }
 
     const finalIng = currentIngredients.find((i) => i.ingredient_id === flatIngredient.parentId);
-    return finalIng?.quantity || 0;
+    const result = finalIng?.quantity || 0;
+    console.log(`[getRequiredQuantity] Nested: ${flatIngredient.name} = ${result}`);
+    return result;
   };
 
   // CALCULAR VARIANCIA DE COSTOS
