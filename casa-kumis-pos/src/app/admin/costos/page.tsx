@@ -794,27 +794,32 @@ export default function AdminCostosPage() {
 
     // Recorrer toda la cadena de padres y multiplicar cantidades
     for (let i = 0; i < parts.length; i++) {
-      const currentIdx = parseInt(parts[i], 10);
+      const currentId = parts[i];
+      const currentIng = currentIngredients.find((ing) => ing.ingredient_id === currentId);
 
-      // Validar que el índice sea válido
-      if (isNaN(currentIdx) || currentIdx < 0 || currentIdx >= currentIngredients.length) {
+      if (!currentIng) {
+        console.warn(`No se encontró ingrediente con ID: ${currentId}`, { currentIngredients, flatIngredient });
         return 0;
       }
-
-      const currentIng = currentIngredients[currentIdx];
-      if (!currentIng) return 0;
 
       totalMultiplier *= currentIng.quantity || 0;
 
       // Si no es el último elemento, cargar los ingredientes del siguiente nivel
       if (i < parts.length - 1) {
-        if (currentIng.ingredient_type !== "PRODUCT") return 0;
+        if (currentIng.ingredient_type !== "PRODUCT") {
+          console.warn(`Ingrediente ${currentId} no es PRODUCT, no puede tener sub-ingredientes`);
+          return 0;
+        }
         const subFormula = formulas.find((f) => f.id === currentIng.ingredient_id);
-        if (!subFormula) return 0;
+        if (!subFormula) {
+          console.warn(`No se encontró fórmula para ${currentIng.ingredient_id}`);
+          return 0;
+        }
         currentIngredients = subFormula.ingredients;
       }
     }
 
+    console.log(`getTotalRequiredQuantity(${flatIngredient.id}) = ${totalMultiplier}`);
     return totalMultiplier;
   };
 
