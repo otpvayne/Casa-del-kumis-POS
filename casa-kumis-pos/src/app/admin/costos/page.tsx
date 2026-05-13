@@ -783,6 +783,36 @@ export default function AdminCostosPage() {
     return finalIng?.quantity || 0;
   };
 
+  // Calcular cantidad total requerida considerando toda la cadena de padres
+  const getTotalRequiredQuantity = (flatIngredient: any, quantity: number = 1): number => {
+    const selectedFormula = formulas.find((f) => f.id === productoVariancia);
+    if (!selectedFormula) return 0;
+
+    const parts = flatIngredient.id.split(".");
+    let currentIngredients = selectedFormula.ingredients;
+    let totalQty = quantity;
+
+    // Para cada parte del ID, obtener la cantidad del padre
+    for (let i = 0; i < parts.length; i++) {
+      const currentId = parts[i];
+      const currentIng = currentIngredients.find((ing) => ing.ingredient_id === currentId);
+
+      if (!currentIng) return 0;
+
+      totalQty *= currentIng.quantity || 0;
+
+      // Si no es el último elemento, cargar los ingredientes del siguiente nivel
+      if (i < parts.length - 1) {
+        if (currentIng.ingredient_type !== "PRODUCT") return 0;
+        const subFormula = formulas.find((f) => f.id === currentIng.ingredient_id);
+        if (!subFormula) return 0;
+        currentIngredients = subFormula.ingredients;
+      }
+    }
+
+    return totalQty;
+  };
+
 
   // CALCULAR VARIANCIA DE COSTOS
   const calcularVarianciaCostos = async () => {
@@ -815,7 +845,7 @@ export default function AdminCostosPage() {
       }
 
       // Validar que no se exceda la cantidad requerida
-      const required = getRequiredQuantity(ingredient) * (parseFloat(cantidadProducida) || 0);
+      const required = getTotalRequiredQuantity(ingredient, parseFloat(cantidadProducida) || 0);
       if (totalQty > required) {
         setErr(
           `${ingredient.name}: ${totalQty.toFixed(2)} excede lo requerido (${required.toFixed(2)}). ` +
@@ -4840,7 +4870,7 @@ export default function AdminCostosPage() {
                                         </span>
                                       )}
                                       <span className="text-xs text-gray-500 ml-2">
-                                        ({(getRequiredQuantity(ing) * (parseFloat(cantidadProducida) || 0)).toFixed(2)} {batches.find((b) => b.id === ingredienteLotes[ing.id]?.[0]?.batchId)?.unit || "unidad"} requerido)
+                                        ({(getTotalRequiredQuantity(ing, parseFloat(cantidadProducida) || 0)).toFixed(2)} {batches.find((b) => b.id === ingredienteLotes[ing.id]?.[0]?.batchId)?.unit || "unidad"} requerido)
                                       </span>
                                     </label>
 
@@ -4889,7 +4919,7 @@ export default function AdminCostosPage() {
                                         })}
                                         {(() => {
                                           const total = ingredienteLotes[ing.id].reduce((sum, s) => sum + s.quantity, 0);
-                                          const required = getRequiredQuantity(ing) * (parseFloat(cantidadProducida) || 0);
+                                          const required = getTotalRequiredQuantity(ing, parseFloat(cantidadProducida) || 0);
                                           const unit = batches.find((b) => b.id === ingredienteLotes[ing.id][0]?.batchId)?.unit || "unidad";
                                           const percentage = required > 0 ? (total / required) * 100 : 0;
                                           const isExcess = total > required;
@@ -5025,7 +5055,7 @@ export default function AdminCostosPage() {
                                               const qtyInOtherBatches = ingredienteLotes[ing.id]
                                                 .slice(0, lastIdx)
                                                 .reduce((sum, sel) => sum + sel.quantity, 0);
-                                              const required = getRequiredQuantity(ing) * (parseFloat(cantidadProducida) || 0);
+                                              const required = getTotalRequiredQuantity(ing, parseFloat(cantidadProducida) || 0);
                                               const maxByFormula = required - qtyInOtherBatches;
                                               const maxByBatch = batch?.quantity_out || 0;
                                               const maxQty = Math.min(maxByFormula, maxByBatch);
