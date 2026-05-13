@@ -1,4 +1,5 @@
 import UserChip from "@/components/UserChip";
+import { PlantSelector } from "@/components/PlantSelector";
 
 type PageShellProps = {
   title: React.ReactNode;
@@ -21,6 +22,7 @@ export default function PageShell({ title, subtitle, right, children }: PageShel
 
         <div className="flex items-center gap-2">
           {right ? right : null}
+          <PlantSelector />
           <UserChip />
         </div>
       </div>

@@ -4,8 +4,12 @@ import { useEffect, useMemo, useState, useRef } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { useRouter } from "next/navigation";
 import { requireRole } from "@/lib/requireRole";
+import { usePlant } from "@/contexts/PlantContext";
+import { calculateProductCost, calculateCostVariance, type MaterialBatch } from "@/utils/costCalculations";
 import PageShell from "@/components/PageShell";
 import LoadingCard from "@/components/LoadingCard";
+import { BatchLotSelector } from "@/components/BatchLotSelector";
+import { CostBreakdown } from "@/components/CostBreakdown";
 import {
   CostsTabs,
   CostsCard,
@@ -35,7 +39,7 @@ import {
   Bell,
 } from "lucide-react";
 
-type Tab = "materias-primas" | "produccion" | "formulas" | "reportes" | "alertas";
+type Tab = "materias-primas" | "produccion" | "formulas" | "reportes" | "historial" | "alertas";
 
 type RawMaterial = {
   id: string;
@@ -82,9 +86,11 @@ type ProductFormula = {
 
 export default function AdminCostosPage() {
   const router = useRouter();
+  const { selectedPlantId } = usePlant();
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<Tab>("materias-primas");
   const [err, setErr] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
   const detallesRef = useRef<HTMLDivElement>(null);
 
   // Materias Primas
@@ -140,11 +146,11 @@ export default function AdminCostosPage() {
 
   // MERMA ADICIONAL
   const [batchSelect, setBatchSelect] = useState("");
-  const [wasteType, setWasteType] = useState("");
   const [wasteQty, setWasteQty] = useState("");
   const [wasteReason, setWasteReason] = useState("");
   const [savingWaste, setSavingWaste] = useState(false);
-  const [wasteTypes, setWasteTypes] = useState<Array<{ id: string; name: string; code: string }>>([]);
+  const [batches, setBatches] = useState<Array<any>>([]); // Lotes disponibles
+  const [loadingBatches, setLoadingBatches] = useState(false);
 
   // PRODUCCIÓN
   const [produceProduct, setProduceProduct] = useState("");
@@ -173,17 +179,38 @@ export default function AdminCostosPage() {
   const [savingDuplicate, setSavingDuplicate] = useState(false);
 
   // REPORTES
-  const [reportesTab, setReportesTab] = useState<"resumen" | "merma" | "produccion" | "variancia">("resumen");
+  const [reportesTab, setReportesTab] = useState<"resumen" | "merma" | "produccion" | "variancia" | "costos">("resumen");
+  const [reportesCostosFiltroProducto, setReportesCostosFiltroProducto] = useState("");
+  const [reportesCostosFiltroDesde, setReportesCostosFiltroDesde] = useState("");
+  const [reportesCostosFiltroHasta, setReportesCostosFiltroHasta] = useState("");
   const [dataMerma, setDataMerma] = useState<any[]>([]);
   const [dataProduccion, setDataProduccion] = useState<any[]>([]);
   const [dataVariancia, setDataVariancia] = useState<any[]>([]);
   const [loadingReportes, setLoadingReportes] = useState(false);
+
+  // HISTORIAL DE COSTOS (Opción D)
+  const [historialTab, setHistorialTab] = useState<"por-producto" | "variancia-acumulada" | "tendencias">("por-producto");
+  const [historialData, setHistorialData] = useState<any[]>([]);
+  const [historialProductoFiltro, setHistorialProductoFiltro] = useState<string>("");
+  const [loadingHistorialCostos, setLoadingHistorialCostos] = useState(false);
 
   // ALERTAS
   const [alertas, setAlertas] = useState<any[]>([]);
   const [alertasNoLeidas, setAlertasNoLeidas] = useState(0);
   const [filtroAlertas, setFiltroAlertas] = useState<"todas" | "red" | "yellow">("todas");
   const [loadingAlertas, setLoadingAlertas] = useState(false);
+
+  // ALERTAS PERSONALIZADAS (umbrales)
+  const [alertasTab, setAlertasTab] = useState<"notificaciones" | "configurar">("notificaciones");
+  const [thresholds, setThresholds] = useState<any[]>([]);
+  const [loadingThresholds, setLoadingThresholds] = useState(false);
+  const [savingThreshold, setSavingThreshold] = useState(false);
+  const [showAddThreshold, setShowAddThreshold] = useState(false);
+  const [thresholdMaterial, setThresholdMaterial] = useState("");
+  const [thresholdState, setThresholdState] = useState("");
+  const [thresholdMinStock, setThresholdMinStock] = useState("");
+  const [thresholdMaxCost, setThresholdMaxCost] = useState("");
+  const [thresholdMaxWaste, setThresholdMaxWaste] = useState("");
 
   // BÚSQUEDA E HISTORIAL
   const [materialesSearchTerm, setMaterialesSearchTerm] = useState("");
@@ -193,14 +220,21 @@ export default function AdminCostosPage() {
   const [mostrarHistorialMateria, setMostrarHistorialMateria] = useState(false);
   const [mostrarHistorialFormula, setMostrarHistorialFormula] = useState(false);
 
-  // ANÁLISIS DE VARIANCIA
+  // ANÁLISIS DE VARIANCIA (Costos)
   const [mostrarAnalisisVariancia, setMostrarAnalisisVariancia] = useState(false);
+  const [productoVariancia, setProductoVariancia] = useState("");
+  const [cantidadProducida, setCantidadProducida] = useState("");
+  const [ingredienteLotes, setIngredienteLotes] = useState<Record<string, Array<{batchId: string; quantity: number}>>>({}); // ingrediente_id -> [{batchId, quantity}]
+  const [rawQtyText, setRawQtyText] = useState<Record<string, string>>({}); // texto raw del input de cantidad (ingId -> texto)
+  const [varianciaResultado, setVarianciaResultado] = useState<any>(null);
+  const [savingVariancia, setSavingVariancia] = useState(false);
+
+  // Antiguo (mantener por compatibilidad)
   const [productoAnalisis, setProductoAnalisis] = useState("");
   const [teoricoAnalisis, setTeoricoAnalisis] = useState(0);
   const [realAnalisis, setRealAnalisis] = useState("");
   const [ingredientesReales, setIngredientesReales] = useState<Record<string, string>>({});
   const [varianciaCalculada, setVarianciaCalculada] = useState<any>(null);
-  const [savingVariancia, setSavingVariancia] = useState(false);
 
   // Crear nueva fórmula
   const [newFormulaName, setNewFormulaName] = useState("");
@@ -229,6 +263,7 @@ export default function AdminCostosPage() {
     { id: "produccion" as Tab, label: "Producción" },
     { id: "formulas" as Tab, label: "Fórmulas" },
     { id: "reportes" as Tab, label: "Reportes" },
+    { id: "historial" as Tab, label: "Historial de Costos" },
     { id: "alertas" as Tab, label: "Alertas" },
   ];
 
@@ -243,6 +278,8 @@ export default function AdminCostosPage() {
         return <ListChecks size={18} className="inline mr-2" />;
       case "reportes":
         return <BarChart3 size={18} className="inline mr-2" />;
+      case "historial":
+        return <TrendingDown size={18} className="inline mr-2" />;
       case "alertas":
         return (
           <div className="inline-flex items-center gap-2">
@@ -629,12 +666,9 @@ export default function AdminCostosPage() {
   // FUNCIONES PARA PRODUCCIÓN
   // ============================================================================
 
-  // Cargar tipos de merma y productos
+  // Cargar productos
   const cargarDatosProduccion = async () => {
     try {
-      const { data: types } = await supabase.from("waste_types").select("*").eq("is_active", true);
-      setWasteTypes(types ?? []);
-
       const { data: prods } = await supabase.from("products").select("id, name");
       setProducts(prods ?? []);
     } catch (e) {
@@ -649,11 +683,505 @@ export default function AdminCostosPage() {
     }
     if (activeTab === "produccion") {
       cargarDatosProduccion();
+      cargarLotes();
     }
     if (activeTab === "formulas") {
       cargarFormulas();
     }
-  }, [activeTab]);
+    if (activeTab === "historial") {
+      cargarHistorial();
+    }
+    if (activeTab === "alertas") {
+      cargarThresholds();
+    }
+  }, [activeTab, selectedPlantId]);
+
+  // FUNCIÓN HELPER: Obtener todos los ingredientes recursivamente (incluyendo anidados)
+  const obtenerTodosLosIngredientes = (
+    ingredientes: any[],
+    prefix: string = ""
+  ): Array<{ id: string; name: string; type: string; parentId?: string; stateId?: string; stateName?: string; level: number }> => {
+    let resultado: any[] = [];
+
+    for (const ing of ingredientes) {
+      const ingId = prefix ? `${prefix}.${ing.ingredient_id}` : ing.ingredient_id;
+      resultado.push({
+        id: ingId,
+        name: ing.ingredient_name,
+        type: ing.ingredient_type,
+        parentId: ing.ingredient_id,
+        stateId: ing.ingredient_state_id || null,
+        stateName: ing.ingredient_state_name || null,
+        level: prefix ? (prefix.match(/\./g)?.length || 0) + 1 : 0,
+      });
+
+      // Si es un producto anidado, obtener sus ingredientes recursivamente
+      if (ing.ingredient_type === "PRODUCT") {
+        const formulaAnidada = formulas.find((f) => f.id === ing.ingredient_id);
+        if (formulaAnidada) {
+          const subIngredientes = obtenerTodosLosIngredientes(
+            formulaAnidada.ingredients,
+            ingId
+          );
+          resultado = [...resultado, ...subIngredientes];
+        }
+      }
+    }
+
+    return resultado;
+  };
+
+  // Extraer el ID original de un ID aplanado (ej: "masa-id.harina-id" -> "harina-id")
+  const getOriginalIngredientId = (flatId: string): string => {
+    const parts = flatId.split(".");
+    return parts[parts.length - 1];
+  };
+
+  // Generar código de lote único automáticamente
+  const generateLotCode = (materialName: string): string => {
+    const today = new Date();
+    const year = today.getFullYear();
+    const month = String(today.getMonth() + 1).padStart(2, "0");
+    const day = String(today.getDate()).padStart(2, "0");
+    const randomNum = Math.floor(Math.random() * 10000)
+      .toString()
+      .padStart(4, "0");
+
+    // Tomar primeras 3 letras del material (en mayúscula)
+    const materialCode = materialName.substring(0, 3).toUpperCase();
+
+    return `${materialCode}-${year}${month}${day}-${randomNum}`;
+  };
+
+  // Obtener cantidad requerida de un ingrediente flattened
+  const getRequiredQuantity = (flatIngredient: any): number => {
+    const selectedFormula = formulas.find((f) => f.id === productoVariancia);
+    if (!selectedFormula) return 0;
+
+    // Para ingredientes de nivel 0, buscar directamente
+    if (flatIngredient.level === 0) {
+      const ing = selectedFormula.ingredients.find((i) => i.ingredient_id === flatIngredient.parentId);
+      return ing?.quantity || 0;
+    }
+
+    // Para ingredientes anidados, recurrir en la estructura
+    const parts = flatIngredient.id.split(".");
+    let currentIngredients = selectedFormula.ingredients;
+
+    for (let i = 0; i < parts.length - 1; i++) {
+      const parentId = parts[i];
+      const currentIng = currentIngredients.find((ing) => ing.ingredient_id === parentId);
+      if (!currentIng || currentIng.ingredient_type !== "PRODUCT") return 0;
+
+      const subFormula = formulas.find((f) => f.id === currentIng.ingredient_id);
+      if (!subFormula) return 0;
+
+      currentIngredients = subFormula.ingredients;
+    }
+
+    const finalIng = currentIngredients.find((i) => i.ingredient_id === flatIngredient.parentId);
+    return finalIng?.quantity || 0;
+  };
+
+  // CALCULAR VARIANCIA DE COSTOS
+  const calcularVarianciaCostos = async () => {
+    if (!productoVariancia || !cantidadProducida) {
+      setErr("Selecciona producto y cantidad producida.");
+      return;
+    }
+
+    const selectedFormula = formulas.find((f) => f.id === productoVariancia);
+    if (!selectedFormula) {
+      setErr("Fórmula no encontrada.");
+      return;
+    }
+
+    // Verificar que todos los ingredientes (incluyendo anidados) tengan lotes y cantidad seleccionados
+    const allIngredients = obtenerTodosLosIngredientes(selectedFormula.ingredients);
+    const rawMaterialIngredients = allIngredients.filter((ing) => ing.type === "RAW_MATERIAL");
+
+    for (const ingredient of rawMaterialIngredients) {
+      const selections = ingredienteLotes[ingredient.id];
+      if (!selections || selections.length === 0) {
+        setErr(`Selecciona al menos un lote para ${ingredient.name}.`);
+        return;
+      }
+
+      const totalQty = selections.reduce((sum, sel) => sum + (sel.quantity || 0), 0);
+      if (totalQty <= 0) {
+        setErr(`Ingresa cantidad para ${ingredient.name}.`);
+        return;
+      }
+
+      // Validar que no se exceda la cantidad requerida
+      const required = getRequiredQuantity(ingredient);
+      if (totalQty > required) {
+        setErr(
+          `${ingredient.name}: ${totalQty.toFixed(2)} excede lo requerido (${required.toFixed(2)}). ` +
+            `Por favor reduce la cantidad.`
+        );
+        return;
+      }
+    }
+
+    try {
+      // Convertir batches al formato correcto
+      const batchesFormato = batches.map((b) => ({
+        id: b.id,
+        raw_material_id: b.raw_material_id,
+        quantity_in: parseFloat(b.quantity_in),
+        quantity_out: parseFloat(b.quantity_out),
+        cost: parseFloat(b.cost) || 0,
+        cost_per_unit: parseFloat(b.cost_per_unit) || 0,
+        batch_date: b.batch_date,
+        lot_code: b.lot_code,
+      }));
+
+      // Crear mapa de fórmulas
+      const formulasMap = new Map(
+        formulas.map((f) => [
+          f.id,
+          f.ingredients.map((ing) => ({
+            ingredient_id: ing.ingredient_id,
+            ingredient_name: ing.ingredient_name || "Ingrediente",
+            ingredient_type: ing.ingredient_type,
+            quantity: ing.quantity,
+            unit: ing.unit,
+            state_id: ing.ingredient_state_id,
+          })),
+        ])
+      ) as any;
+
+      // Convertir las selecciones de múltiples lotes a un lote ponderado
+      const batchSelections: Record<string, string> = {};
+      const virtualBatches: Record<string, MaterialBatch> = {};
+
+      Object.entries(ingredienteLotes).forEach(([flatId, selections]) => {
+        const originalId = getOriginalIngredientId(flatId);
+
+        if (selections.length === 1) {
+          // Un solo lote: usar directamente
+          batchSelections[originalId] = selections[0].batchId;
+        } else {
+          // Múltiples lotes: crear lote virtual con costo promedio ponderado
+          const totalQty = selections.reduce((sum, sel) => sum + sel.quantity, 0);
+          let totalCost = 0;
+
+          selections.forEach((sel) => {
+            const batch = batchesFormato.find((b) => b.id === sel.batchId);
+            if (batch) {
+              const costPerUnit = batch.cost_per_unit || 0;
+              totalCost += costPerUnit * sel.quantity;
+            }
+          });
+
+          const weightedCostPerUnit = totalQty > 0 ? totalCost / totalQty : 0;
+
+          const virtualBatchId = `VIRTUAL-${originalId}`;
+          virtualBatches[virtualBatchId] = {
+            id: virtualBatchId,
+            raw_material_id: originalId,
+            quantity_in: totalQty,
+            quantity_out: totalQty,
+            cost: totalCost,
+            cost_per_unit: weightedCostPerUnit,
+            batch_date: new Date().toISOString().split("T")[0],
+            lot_code: `Mezcla (${selections.length} lotes)`,
+          };
+
+          batchSelections[originalId] = virtualBatchId;
+        }
+      });
+
+      // Agregar lotes virtuales a la lista de batches
+      const batchesConVirtual = [...batchesFormato, ...Object.values(virtualBatches)];
+
+
+      // Calcular costo del producto
+      const cantProducida = parseFloat(cantidadProducida);
+      const ingredientsFormatted = selectedFormula.ingredients.map((ing) => ({
+        ingredient_id: ing.ingredient_id,
+        ingredient_name: ing.ingredient_name || "Ingrediente",
+        ingredient_type: ing.ingredient_type,
+        quantity: ing.quantity,
+        unit: ing.unit,
+        state_id: ing.ingredient_state_id,
+      })) as any;
+
+      const { totalCost, breakdown } = calculateProductCost(
+        productoVariancia,
+        ingredientsFormatted,
+        batchSelections,
+        batchesConVirtual,
+        formulasMap
+      );
+
+      // totalCost ya es el costo de 1 unidad (calculateProductCost trabaja con cantidades de la fórmula por unidad)
+      const costPorUnidad = totalCost;
+      const costTotalProduccion = totalCost * cantProducida;
+
+      setVarianciaResultado({
+        producto_id: productoVariancia,
+        producto_nombre: selectedFormula.name,
+        cantidad_producida: cantProducida,
+        cost_estimated: costTotalProduccion,
+        cost_per_unit: costPorUnidad,
+        cost_breakdown: breakdown,
+        breakdown_json: JSON.stringify(breakdown),
+      });
+
+      setErr(null);
+    } catch (e: any) {
+      console.error("Error calculando variancia:", e);
+      setErr(e.message || "Error calculando variancia.");
+    }
+  };
+
+  // GUARDAR VARIANCIA
+  const guardarVariancia = async () => {
+    if (!varianciaResultado) {
+      setErr("Calcula variancia primero.");
+      return;
+    }
+
+    setSavingVariancia(true);
+    try {
+      const session = await supabase.auth.getSession();
+      const userId = session.data.session?.user.id;
+
+      // 1. Guardar registro en production_variance_log
+      const { error } = await supabase
+        .from("production_variance_log")
+        .insert([
+          {
+            product_id: varianciaResultado.producto_id,
+            quantity_produced: varianciaResultado.cantidad_producida,
+            cost_estimated: varianciaResultado.cost_estimated,
+            cost_per_unit: varianciaResultado.cost_per_unit,
+            cost_breakdown: varianciaResultado.breakdown_json,
+            plant_id: selectedPlantId,
+            created_by: userId,
+            variance_date: new Date().toISOString().split("T")[0],
+          },
+        ]);
+
+      if (error) throw error;
+
+      // 2. Descontar de los lotes específicos seleccionados
+      // Agrupar cantidades por batchId (por si el mismo lote aparece en dos ingredientes)
+      const batchDeductions: Record<string, number> = {};
+      for (const selections of Object.values(ingredienteLotes)) {
+        for (const sel of selections) {
+          if (!sel.batchId || sel.quantity <= 0) continue;
+          batchDeductions[sel.batchId] = (batchDeductions[sel.batchId] || 0) + sel.quantity;
+        }
+      }
+
+      // Agrupar descuentos de inventario por (raw_material_id + to_state_id)
+      const inventoryDeductions: Record<string, { rawMaterialId: string; stateId: string; qty: number }> = {};
+
+      for (const [batchId, qtyUsed] of Object.entries(batchDeductions)) {
+        const batch = batches.find((b) => b.id === batchId);
+        if (!batch) continue;
+
+        // Actualizar quantity_out del lote específico
+        const newQtyOut = Math.max(0, batch.quantity_out - qtyUsed);
+        await supabase
+          .from("raw_material_batches")
+          .update({ quantity_out: newQtyOut })
+          .eq("id", batchId);
+
+        // Acumular descuento de inventario
+        const invKey = `${batch.raw_material_id}-${batch.to_state_id}`;
+        if (!inventoryDeductions[invKey]) {
+          inventoryDeductions[invKey] = {
+            rawMaterialId: batch.raw_material_id,
+            stateId: batch.to_state_id,
+            qty: 0,
+          };
+        }
+        inventoryDeductions[invKey].qty += qtyUsed;
+      }
+
+      // Actualizar inventario agregado (raw_material_inventory)
+      for (const { rawMaterialId, stateId, qty } of Object.values(inventoryDeductions)) {
+        const { data: invData } = await supabase
+          .from("raw_material_inventory")
+          .select("id, quantity")
+          .eq("raw_material_id", rawMaterialId)
+          .eq("state_id", stateId)
+          .single();
+
+        if (invData) {
+          await supabase
+            .from("raw_material_inventory")
+            .update({ quantity: Math.max(0, (invData.quantity || 0) - qty) })
+            .eq("id", invData.id);
+        }
+      }
+
+      // 3. Recargar datos actualizados
+      await cargarLotes();
+      await cargarMaterialesPrimas();
+      verificarThresholds(); // verificar stock tras producción
+
+      setSuccess("✓ Producción registrada. Stock y lotes actualizados.");
+      setTimeout(() => {
+        setSuccess(null);
+        setMostrarAnalisisVariancia(false);
+        setProductoVariancia("");
+        setCantidadProducida("");
+        setIngredienteLotes({});
+        setVarianciaResultado(null);
+      }, 2500);
+    } catch (e: any) {
+      setErr(e.message || "Error guardando variancia.");
+      setSuccess(null);
+    } finally {
+      setSavingVariancia(false);
+    }
+  };
+
+  // CARGAR LOTES DISPONIBLES
+  const cargarLotes = async () => {
+    try {
+      setLoadingBatches(true);
+      const { data, error } = await supabase
+        .from("raw_material_batches")
+        .select("id, lot_code, raw_material_id, to_state_id, quantity_out, cost_per_unit, batch_date, raw_materials(name, unit), raw_material_states!to_state_id(name)")
+        .gt("quantity_out", 0)
+        .eq("plant_id", selectedPlantId)
+        .order("batch_date", { ascending: false });
+
+      if (error) throw error;
+
+      const formattedBatches = (data ?? []).map((batch: any) => ({
+        id: batch.id,
+        lot_code: batch.lot_code,
+        raw_material_id: batch.raw_material_id,
+        to_state_id: batch.to_state_id,
+        state_name: batch.raw_material_states?.name || null,
+        raw_material_name: batch.raw_materials?.name || "Material",
+        quantity_out: parseFloat(batch.quantity_out),
+        cost_per_unit: parseFloat(batch.cost_per_unit) || 0,
+        unit: batch.raw_materials?.unit || "unidad",
+        batch_date: batch.batch_date,
+      }));
+
+      setBatches(formattedBatches);
+    } catch (e: any) {
+      console.error("Error cargando lotes:", e);
+      setErr("Error cargando lotes disponibles");
+    } finally {
+      setLoadingBatches(false);
+    }
+  };
+
+  // REGISTRAR MERMA
+  const registrarMerma = async () => {
+    if (!batchSelect || !wasteQty) {
+      setErr("Selecciona lote y cantidad de merma.");
+      return;
+    }
+
+    const selectedBatch = batches.find((b) => b.id === batchSelect);
+    if (!selectedBatch) {
+      setErr("Lote no encontrado.");
+      return;
+    }
+
+    const wasteQuantity = parseFloat(wasteQty);
+
+    if (isNaN(wasteQuantity) || wasteQuantity <= 0) {
+      setErr("Cantidad de merma debe ser mayor a 0.");
+      return;
+    }
+
+    if (wasteQuantity > selectedBatch.quantity_out) {
+      setErr(`No puedes descartar más de ${selectedBatch.quantity_out} ${selectedBatch.unit}.`);
+      return;
+    }
+
+    setSavingWaste(true);
+    try {
+      const session = await supabase.auth.getSession();
+      const userId = session.data.session?.user.id;
+
+      // Calcular nuevo costo unitario
+      const costAffected = wasteQuantity * selectedBatch.cost_per_unit;
+      const newQuantity = selectedBatch.quantity_out - wasteQuantity;
+      const newCostPerUnit = newQuantity > 0 ? selectedBatch.cost_per_unit : 0;
+
+      // Registrar merma en batch_merma_history
+      const { error: mermaError } = await supabase
+        .from("batch_merma_history")
+        .insert([
+          {
+            batch_id: batchSelect,
+            quantity_waste: wasteQuantity,
+            waste_reason: wasteReason || null,
+            cost_affected: costAffected,
+            created_by: userId,
+            plant_id: selectedPlantId,
+          },
+        ]);
+
+      if (mermaError) throw mermaError;
+
+      // Actualizar el lote (restar cantidad y mantener cost_per_unit igual)
+      const { error: updateError } = await supabase
+        .from("raw_material_batches")
+        .update({
+          quantity_out: newQuantity,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", batchSelect);
+
+      if (updateError) throw updateError;
+
+      // Actualizar inventario (raw_material_inventory)
+      const { data: invData } = await supabase
+        .from("raw_material_inventory")
+        .select("*")
+        .eq("raw_material_id", selectedBatch.raw_material_id);
+
+      if (invData && invData[0]) {
+        const currentQty = parseFloat(invData[0].quantity) || 0;
+        const updatedQty = Math.max(0, currentQty - wasteQuantity);
+
+        await supabase
+          .from("raw_material_inventory")
+          .update({ quantity: updatedQty, last_updated: new Date().toISOString() })
+          .eq("id", invData[0].id);
+      }
+
+      // Registrar audit log
+      await supabase.from("raw_material_inventory_audit_logs").insert([
+        {
+          raw_material_id: selectedBatch.raw_material_id,
+          quantity_before: invData?.[0]?.quantity || 0,
+          quantity_after: Math.max(0, (invData?.[0]?.quantity || 0) - wasteQuantity),
+          reason: `Merma: ${wasteReason || "Sin especificar"}`,
+          related_id: batchSelect,
+        },
+      ]);
+
+      // Limpiar formulario
+      setBatchSelect("");
+      setWasteQty("");
+      setWasteReason("");
+      await cargarLotes();
+      await cargarMaterialesPrimas();
+      setErr(null);
+      setSuccess("✓ Merma registrada exitosamente");
+      setTimeout(() => setSuccess(null), 4000);
+    } catch (e: any) {
+      setErr(e.message ?? "Error registrando merma.");
+      setSuccess(null);
+    } finally {
+      setSavingWaste(false);
+    }
+  };
 
   // REGISTRAR ENTRADA INICIAL
   const registrarEntrada = async () => {
@@ -662,13 +1190,30 @@ export default function AdminCostosPage() {
       return;
     }
 
+    if (!entradaCosto || entradaCosto.trim() === "") {
+      setErr("El costo total es obligatorio.");
+      return;
+    }
+
     const qty = parseFloat(entradaCantidad);
-    const cost = entradaCosto ? parseFloat(entradaCosto) : null;
+    const cost = parseFloat(entradaCosto);
 
     if (isNaN(qty) || qty <= 0) {
       setErr("Cantidad debe ser mayor a 0.");
       return;
     }
+
+    if (isNaN(cost) || cost <= 0) {
+      setErr("Costo debe ser mayor a 0.");
+      return;
+    }
+
+    // Calcular costo por unidad
+    const costPerUnit = cost / qty;
+
+    // Generar código de lote si no lo proporciona el usuario
+    const materialName = materialesPrimas.find((m) => m.id === selectedMaterial)?.name || "MAT";
+    const lotCode = entradaLote?.trim() ? entradaLote.trim() : generateLotCode(materialName);
 
     setSavingEntrada(true);
     try {
@@ -686,9 +1231,11 @@ export default function AdminCostosPage() {
             quantity_in: qty,
             quantity_out: qty,
             cost: cost,
+            cost_per_unit: costPerUnit,
+            plant_id: selectedPlantId,
             batch_date: new Date().toISOString().split("T")[0],
             supplier_name: entradaProveedor || null,
-            lot_code: entradaLote || null,
+            lot_code: lotCode,
             observations: entradaObservaciones || null,
             created_by: userId,
           },
@@ -705,9 +1252,13 @@ export default function AdminCostosPage() {
         .eq("state_id", selectedState);
 
       if (invData && invData[0]) {
+        // Convertir quantity a número (Supabase retorna como string)
+        const currentQty = parseFloat(invData[0].quantity) || 0;
+        const newQty = currentQty + qty;
+
         await supabase
           .from("raw_material_inventory")
-          .update({ quantity: (invData[0].quantity || 0) + qty, last_updated: new Date().toISOString() })
+          .update({ quantity: newQty, last_updated: new Date().toISOString() })
           .eq("id", invData[0].id);
       } else {
         await supabase.from("raw_material_inventory").insert([
@@ -739,9 +1290,14 @@ export default function AdminCostosPage() {
       setEntradaLote("");
       setEntradaObservaciones("");
       await cargarMaterialesPrimas();
+      verificarThresholds(); // verificar stock y costos tras nueva entrada
       setErr(null);
+      const lotMessage = entradaLote?.trim() ? "" : ` (Lote generado: ${lotCode})`;
+      setSuccess(`✓ Entrada registrada exitosamente${lotMessage}`);
+      setTimeout(() => setSuccess(null), 4000);
     } catch (e: any) {
       setErr(e.message ?? "Error registrando entrada.");
+      setSuccess(null);
     } finally {
       setSavingEntrada(false);
     }
@@ -767,6 +1323,27 @@ export default function AdminCostosPage() {
       const session = await supabase.auth.getSession();
       const userId = session.data.session?.user.id;
 
+      // Obtener el costo del lote origen para heredarlo al lote destino
+      const { data: sourceBatches } = await supabase
+        .from("raw_material_batches")
+        .select("cost_per_unit, quantity_out")
+        .eq("raw_material_id", transformMaterial)
+        .eq("to_state_id", transformFromState)
+        .eq("plant_id", selectedPlantId)
+        .gt("quantity_out", 0)
+        .order("batch_date", { ascending: false })
+        .limit(1);
+
+      // Calcular costo heredado: misma plata, menos cantidad → mayor costo/unidad
+      const sourceCostPerUnit = sourceBatches?.[0]?.cost_per_unit ?? 0;
+      const totalCostFromSource = sourceCostPerUnit * qtyIn;
+      const inheritedCostPerUnit = qtyOut > 0 ? totalCostFromSource / qtyOut : 0;
+
+      // Auto-generar código de lote para el batch transformado
+      const materialObj = materialesPrimas.find((m) => m.id === transformMaterial);
+      const materialName = materialObj?.name ?? "TRF";
+      const lotCode = generateLotCode(materialName);
+
       // Registrar batch de transformación
       const { data: batchData, error: batchError } = await supabase
         .from("raw_material_batches")
@@ -777,6 +1354,9 @@ export default function AdminCostosPage() {
             to_state_id: transformToState,
             quantity_in: qtyIn,
             quantity_out: qtyOut,
+            cost_per_unit: inheritedCostPerUnit,
+            lot_code: lotCode,
+            plant_id: selectedPlantId,
             batch_date: new Date().toISOString().split("T")[0],
             observations: transformObservaciones || null,
             created_by: userId,
@@ -867,9 +1447,14 @@ export default function AdminCostosPage() {
       setTransformQtyOut("");
       setTransformObservaciones("");
       await cargarMaterialesPrimas();
+      await cargarLotes();
+      verificarThresholds(); // verificar stock tras transformación
       setErr(null);
+      setSuccess(`✓ Transformación registrada. Nuevo lote con ${qtyOut} ${materialObj?.unit ?? "unidades"} creado.`);
+      setTimeout(() => setSuccess(null), 5000);
     } catch (e: any) {
       setErr(e.message ?? "Error registrando transformación.");
+      setSuccess(null);
     } finally {
       setSavingTransform(false);
     }
@@ -1315,6 +1900,236 @@ export default function AdminCostosPage() {
       console.error("Error cargando reportes:", e);
     } finally {
       setLoadingReportes(false);
+    }
+  };
+
+  // CARGAR HISTORIAL DE COSTOS (Opción D)
+  const cargarHistorial = async () => {
+    setLoadingHistorialCostos(true);
+    try {
+      if (formulas.length === 0) await cargarFormulas();
+
+      const { data, error } = await supabase
+        .from("production_variance_log")
+        .select("*")
+        .eq("plant_id", selectedPlantId)
+        .order("variance_date", { ascending: false })
+        .limit(500);
+
+      if (error) throw error;
+
+      const enriched = (data ?? []).map((item: any) => {
+        const prod = formulas.find((f) => f.id === item.product_id);
+        const costPorUnidad = item.cost_per_unit ??
+          (item.quantity_produced > 0 ? item.cost_estimated / item.quantity_produced : 0);
+        return {
+          ...item,
+          product_name: prod?.name ?? "Desconocido",
+          cost_per_unit: costPorUnidad,
+          fecha_display: new Date(item.variance_date ?? item.created_at).toLocaleDateString("es-CO"),
+        };
+      });
+
+      setHistorialData(enriched);
+    } catch (e: any) {
+      console.error("Error cargando historial:", e);
+    } finally {
+      setLoadingHistorialCostos(false);
+    }
+  };
+
+  // CARGAR UMBRALES PERSONALIZADOS
+  const cargarThresholds = async () => {
+    setLoadingThresholds(true);
+    try {
+      const { data, error } = await supabase
+        .from("material_alert_thresholds")
+        .select("*, raw_materials(name, unit), raw_material_states!state_id(name)")
+        .eq("plant_id", selectedPlantId)
+        .eq("is_active", true)
+        .order("created_at", { ascending: false });
+
+      if (error) {
+        // Tabla puede no existir aún
+        if (error.code === "42P01") {
+          setThresholds([]);
+          return;
+        }
+        throw error;
+      }
+
+      setThresholds((data ?? []).map((t: any) => ({
+        ...t,
+        material_name: t.raw_materials?.name ?? "Desconocido",
+        material_unit: t.raw_materials?.unit ?? "u",
+        state_name: t.raw_material_states?.name ?? null,
+      })));
+    } catch (e: any) {
+      console.error("Error cargando umbrales:", e);
+    } finally {
+      setLoadingThresholds(false);
+    }
+  };
+
+  // GUARDAR UMBRAL
+  const guardarThreshold = async () => {
+    if (!thresholdMaterial) {
+      setErr("Selecciona una materia prima.");
+      return;
+    }
+    if (!thresholdMinStock && !thresholdMaxCost && !thresholdMaxWaste) {
+      setErr("Define al menos un umbral (stock mínimo, costo máximo o merma máxima).");
+      return;
+    }
+
+    setSavingThreshold(true);
+    try {
+      const session = await supabase.auth.getSession();
+      const userId = session.data.session?.user.id;
+
+      const payload: any = {
+        plant_id: selectedPlantId,
+        raw_material_id: thresholdMaterial,
+        state_id: thresholdState || null,
+        is_active: true,
+        created_by: userId,
+      };
+      if (thresholdMinStock) payload.min_stock = parseFloat(thresholdMinStock);
+      if (thresholdMaxCost) payload.max_cost_per_unit = parseFloat(thresholdMaxCost);
+      if (thresholdMaxWaste) payload.max_waste_pct = parseFloat(thresholdMaxWaste);
+
+      const { error } = await supabase
+        .from("material_alert_thresholds")
+        .upsert([payload], { onConflict: "plant_id,raw_material_id,state_id" });
+
+      if (error) throw error;
+
+      setThresholdMaterial("");
+      setThresholdState("");
+      setThresholdMinStock("");
+      setThresholdMaxCost("");
+      setThresholdMaxWaste("");
+      setShowAddThreshold(false);
+      await cargarThresholds();
+      setErr(null);
+    } catch (e: any) {
+      setErr(e.message ?? "Error guardando umbral.");
+    } finally {
+      setSavingThreshold(false);
+    }
+  };
+
+  // ELIMINAR UMBRAL
+  const eliminarThreshold = async (id: string) => {
+    try {
+      await supabase
+        .from("material_alert_thresholds")
+        .update({ is_active: false })
+        .eq("id", id);
+      await cargarThresholds();
+    } catch (e: any) {
+      console.error("Error eliminando umbral:", e);
+    }
+  };
+
+  // VERIFICAR UMBRALES CONTRA INVENTARIO ACTUAL
+  const verificarThresholds = async () => {
+    try {
+      const { data: thresh } = await supabase
+        .from("material_alert_thresholds")
+        .select("*, raw_materials(name, unit)")
+        .eq("plant_id", selectedPlantId)
+        .eq("is_active", true);
+
+      if (!thresh || thresh.length === 0) return;
+
+      for (const t of thresh) {
+        const materialName = t.raw_materials?.name ?? "Material";
+        const unit = t.raw_materials?.unit ?? "u";
+
+        // ── 1. Verificar stock mínimo ──
+        if (t.min_stock != null) {
+          const invQuery = supabase
+            .from("raw_material_inventory")
+            .select("quantity")
+            .eq("raw_material_id", t.raw_material_id);
+
+          if (t.state_id) invQuery.eq("state_id", t.state_id);
+
+          const { data: inv } = await invQuery;
+          const totalStock = (inv ?? []).reduce((s: number, r: any) => s + (r.quantity || 0), 0);
+
+          if (totalStock < t.min_stock) {
+            await crearAlerta(
+              "stock_bajo",
+              "red",
+              `Stock bajo: ${materialName}${t.state_id ? "" : ""} tiene ${totalStock.toFixed(2)} ${unit} — mínimo configurado: ${t.min_stock} ${unit}`,
+              t.raw_material_id,
+              "raw_material"
+            );
+          }
+        }
+
+        // ── 2. Verificar costo máximo por unidad ──
+        if (t.max_cost_per_unit != null) {
+          const batchQuery = supabase
+            .from("raw_material_batches")
+            .select("cost_per_unit, lot_code")
+            .eq("raw_material_id", t.raw_material_id)
+            .eq("plant_id", selectedPlantId)
+            .gt("quantity_out", 0)
+            .order("batch_date", { ascending: false })
+            .limit(5);
+
+          if (t.state_id) batchQuery.eq("to_state_id", t.state_id);
+
+          const { data: lotes } = await batchQuery;
+          const loteCaro = (lotes ?? []).find((b: any) => (b.cost_per_unit ?? 0) > t.max_cost_per_unit);
+
+          if (loteCaro) {
+            await crearAlerta(
+              "umbral_costo",
+              "yellow",
+              `Costo alto: ${materialName} — lote ${loteCaro.lot_code} tiene costo $${(loteCaro.cost_per_unit ?? 0).toLocaleString("es-CO")}/${unit}, máximo configurado: $${t.max_cost_per_unit.toLocaleString("es-CO")}/${unit}`,
+              t.raw_material_id,
+              "raw_material"
+            );
+          }
+        }
+
+        // ── 3. Verificar merma máxima (%) ──
+        if (t.max_waste_pct != null) {
+          // Revisar los últimos lotes de transformación (tienen from_state_id → to_state_id)
+          const { data: transformaciones } = await supabase
+            .from("raw_material_batches")
+            .select("quantity_in, quantity_out, lot_code, batch_date")
+            .eq("raw_material_id", t.raw_material_id)
+            .eq("plant_id", selectedPlantId)
+            .not("from_state_id", "is", null)         // solo transformaciones
+            .gt("quantity_in", 0)
+            .order("batch_date", { ascending: false })
+            .limit(5);
+
+          for (const tr of transformaciones ?? []) {
+            const merma = tr.quantity_in > 0
+              ? ((tr.quantity_in - tr.quantity_out) / tr.quantity_in) * 100
+              : 0;
+
+            if (merma > t.max_waste_pct) {
+              await crearAlerta(
+                "merma_anormal",
+                "yellow",
+                `Merma alta: ${materialName} — lote ${tr.lot_code} tuvo ${merma.toFixed(1)}% de merma (${(tr.quantity_in - tr.quantity_out).toFixed(2)} ${unit} perdidos), máximo configurado: ${t.max_waste_pct}%`,
+                t.raw_material_id,
+                "raw_material"
+              );
+              break; // una alerta por material es suficiente
+            }
+          }
+        }
+      }
+    } catch (e: any) {
+      console.error("Error verificando umbrales:", e);
     }
   };
 
@@ -2610,6 +3425,25 @@ export default function AdminCostosPage() {
             {tipoRegistro === "entrada" && (
               <CostsCard title="Registrar Entrada Inicial" subtitle="Agrega una nueva cantidad de materia prima recibida">
                 <div className="space-y-4">
+                  {err && (
+                    <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-800">
+                      <div className="font-semibold flex items-center gap-2">
+                        <AlertTriangle size={16} />
+                        Error
+                      </div>
+                      <p className="mt-1">{err}</p>
+                    </div>
+                  )}
+
+                  {success && (
+                    <div className="bg-green-50 border border-green-200 rounded-lg p-3 text-sm text-green-800">
+                      <div className="font-semibold flex items-center gap-2">
+                        <span>✓ Éxito</span>
+                      </div>
+                      <p className="mt-1">{success}</p>
+                    </div>
+                  )}
+
                   <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-xs text-blue-900">
                     <div className="font-semibold mb-1 flex items-center gap-2">
                       <Info size={16} />
@@ -2636,23 +3470,40 @@ export default function AdminCostosPage() {
                     />
                   )}
 
-                  <FormInput
-                    label="Cantidad"
-                    value={entradaCantidad}
-                    onChange={setEntradaCantidad}
-                    type="number"
-                    placeholder="0"
-                    disabled={savingEntrada}
-                  />
+                  <div className="space-y-2">
+                    <label className="text-sm font-semibold text-gray-700">
+                      Cantidad {selectedMaterial && <span className="text-gray-600">({materialesPrimas.find(m => m.id === selectedMaterial)?.unit})</span>}
+                    </label>
+                    <input
+                      type="number"
+                      value={entradaCantidad}
+                      onChange={(e) => setEntradaCantidad(e.target.value)}
+                      placeholder="0"
+                      disabled={savingEntrada}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                    />
+                  </div>
 
                   <FormInput
-                    label="Costo Total (opcional)"
+                    label="Costo Total *"
                     value={entradaCosto}
                     onChange={setEntradaCosto}
                     type="number"
                     placeholder="$0"
                     disabled={savingEntrada}
                   />
+
+                  {entradaCantidad && entradaCosto && !isNaN(parseFloat(entradaCantidad)) && !isNaN(parseFloat(entradaCosto)) && parseFloat(entradaCantidad) > 0 && (
+                    <div className="bg-green-50 border border-green-200 rounded-lg p-3 text-sm">
+                      <div className="text-gray-700">
+                        <span className="font-semibold">Costo Unitario:</span>
+                        <span className="ml-2 text-green-700 font-bold">
+                          ${(parseFloat(entradaCosto) / parseFloat(entradaCantidad)).toFixed(2)}
+                        </span>
+                        {selectedMaterial && <span className="text-gray-600 ml-1">por {materialesPrimas.find(m => m.id === selectedMaterial)?.unit}</span>}
+                      </div>
+                    </div>
+                  )}
 
                   <FormInput
                     label="Proveedor (opcional)"
@@ -2663,10 +3514,10 @@ export default function AdminCostosPage() {
                   />
 
                   <FormInput
-                    label="Código de Lote (opcional)"
+                    label="Código de Lote (opcional - se genera automáticamente)"
                     value={entradaLote}
                     onChange={setEntradaLote}
-                    placeholder="Ej: LOTE-001"
+                    placeholder="Dejar vacío para generar automáticamente"
                     disabled={savingEntrada}
                   />
 
@@ -2783,58 +3634,89 @@ export default function AdminCostosPage() {
 
             {/* MERMA ADICIONAL */}
             {tipoRegistro === "merma" && (
-              <CostsCard title="Registrar Merma Adicional" subtitle="Registra pérdidas no esperadas (daño, desperdicio, etc.)">
+              <CostsCard title="Registrar Merma Adicional" subtitle="Registra pérdidas de materia prima de un lote específico">
                 <div className="space-y-4">
+                  {err && (
+                    <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-800">
+                      <div className="font-semibold flex items-center gap-2">
+                        <AlertTriangle size={16} />
+                        Error
+                      </div>
+                      <p className="mt-1">{err}</p>
+                    </div>
+                  )}
+
+                  {success && (
+                    <div className="bg-green-50 border border-green-200 rounded-lg p-3 text-sm text-green-800">
+                      <div className="font-semibold flex items-center gap-2">
+                        <span>✓ Éxito</span>
+                      </div>
+                      <p className="mt-1">{success}</p>
+                    </div>
+                  )}
+
                   <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-xs text-blue-900">
                     <div className="font-semibold mb-1 flex items-center gap-2">
                       <Info size={16} />
                       Información
                     </div>
-                    <p>Registra pérdidas inesperadas de materia prima (daño, desperdicio, rotura, etc.). Especifica qué materia prima, en qué estado y cuánta cantidad se perdió. Esto descuenta automáticamente del inventario.</p>
+                    <p>Selecciona un lote específico de materia prima y registra la cantidad que se perdió por daño, desperdicio, etc. Esto restará automáticamente del inventario disponible del lote.</p>
                   </div>
 
-                  <FormSelect
-                    label="Materia Prima"
-                    value={transformMaterial}
-                    onChange={setTransformMaterial}
-                    options={materialesPrimas.map((m) => ({ value: m.id, label: m.name }))}
-                    disabled={savingWaste}
-                  />
+                  {loadingBatches ? (
+                    <div className="p-3 bg-gray-50 rounded-lg text-center text-gray-600 text-sm">
+                      Cargando lotes...
+                    </div>
+                  ) : (
+                    <>
+                      <BatchLotSelector
+                        batches={batches}
+                        selectedBatchId={batchSelect}
+                        onSelectBatch={setBatchSelect}
+                        label="Seleccionar Lote a Descartar"
+                      />
 
-                  {transformMaterial && (
-                    <FormSelect
-                      label="Estado"
-                      value={transformFromState}
-                      onChange={setTransformFromState}
-                      options={(statesByMaterial[transformMaterial] ?? []).map((s) => ({ value: s.id, label: s.name }))}
-                      disabled={savingWaste}
-                    />
+                      {batchSelect && (
+                        <>
+                          <FormInput
+                            label="Cantidad a Descartar *"
+                            value={wasteQty}
+                            onChange={setWasteQty}
+                            type="number"
+                            placeholder="0"
+                            disabled={savingWaste}
+                          />
+
+                          {wasteQty && !isNaN(parseFloat(wasteQty)) && parseFloat(wasteQty) > 0 && (
+                            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3 text-sm">
+                              <div className="text-gray-700">
+                                <span className="font-semibold">Costo afectado:</span>
+                                <span className="ml-2 text-yellow-700 font-bold">
+                                  ${(parseFloat(wasteQty) * (batches.find((b) => b.id === batchSelect)?.cost_per_unit || 0)).toFixed(2)}
+                                </span>
+                              </div>
+                            </div>
+                          )}
+
+                          <FormInput
+                            label="Razón / Observaciones"
+                            value={wasteReason}
+                            onChange={setWasteReason}
+                            placeholder="¿Por qué se descartó? (daño, vencimiento, etc.)"
+                            disabled={savingWaste}
+                          />
+                        </>
+                      )}
+
+                      <button
+                        className="btn btn-primary w-full"
+                        onClick={registrarMerma}
+                        disabled={savingWaste || !batchSelect || !wasteQty}
+                      >
+                        {savingWaste ? "Registrando..." : "Registrar Merma"}
+                      </button>
+                    </>
                   )}
-
-                  <FormInput
-                    label="Cantidad Pérdida"
-                    value={wasteQty}
-                    onChange={setWasteQty}
-                    type="number"
-                    placeholder="0"
-                    disabled={savingWaste}
-                  />
-
-                  <FormInput
-                    label="Razón / Observaciones"
-                    value={wasteReason}
-                    onChange={setWasteReason}
-                    placeholder="¿Por qué se perdió?"
-                    disabled={savingWaste}
-                  />
-
-                  <button
-                    className="btn btn-primary w-full"
-                    onClick={registrarMermaAdicional}
-                    disabled={savingWaste}
-                  >
-                    {savingWaste ? "Registrando..." : "Registrar Merma"}
-                  </button>
                 </div>
               </CostsCard>
             )}
@@ -3806,6 +4688,403 @@ export default function AdminCostosPage() {
           </div>
         </CostsModal>
 
+        {/* MODAL: Análisis de Variancia (Costos) */}
+        <CostsModal
+          isOpen={mostrarAnalisisVariancia}
+          title="Análisis de Variancia - Costos de Producción"
+          maxWidth="2xl"
+          onClose={() => {
+            setMostrarAnalisisVariancia(false);
+            setProductoVariancia("");
+            setCantidadProducida("");
+            setIngredienteLotes({});
+            setRawQtyText({});
+            setVarianciaResultado(null);
+            setErr(null);
+            setSuccess(null);
+          }}
+        >
+          <div className="space-y-6">
+            {err && (
+              <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-800">
+                <div className="font-semibold flex items-center gap-2">
+                  <AlertTriangle size={16} />
+                  Error
+                </div>
+                <p className="mt-1">{err}</p>
+              </div>
+            )}
+
+            {success && (
+              <div className="bg-green-50 border border-green-200 rounded-lg p-3 text-sm text-green-800">
+                <div className="font-semibold">{success}</div>
+              </div>
+            )}
+
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-xs text-blue-900">
+              <div className="font-semibold mb-1 flex items-center gap-2">
+                <Info size={16} />
+                Cómo usar
+              </div>
+              <ol className="list-decimal list-inside space-y-1">
+                <li>Selecciona el producto que produciste</li>
+                <li>Ingresa la cantidad que produjiste</li>
+                <li>Para cada ingrediente, selecciona el lote que usaste</li>
+                <li>Revisa el desglose de costos y registra</li>
+              </ol>
+            </div>
+
+            {!varianciaResultado ? (
+              <>
+                <div>
+                  <label className="text-sm font-semibold text-gray-700 mb-2 block">Selecciona Producto *</label>
+                  <FormSelect
+                    label=""
+                    value={productoVariancia}
+                    onChange={setProductoVariancia}
+                    options={formulas.map((f) => ({ value: f.id, label: f.name }))}
+                  />
+                </div>
+
+                {productoVariancia && (
+                  <>
+                    <div>
+                      <label className="text-sm font-semibold text-gray-700 mb-2 block">Cantidad Producida *</label>
+                      <FormInput
+                        label=""
+                        type="number"
+                        value={cantidadProducida}
+                        onChange={setCantidadProducida}
+                        placeholder="Unidades"
+                      />
+                    </div>
+
+                    {cantidadProducida && (
+                      <>
+                        <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm">
+                          <div className="font-semibold text-blue-900 mb-2">Ingredientes requeridos:</div>
+                          <div className="space-y-2 text-xs text-blue-800">
+                            {formulas
+                              .find((f) => f.id === productoVariancia)
+                              ?.ingredients.map((ing) => (
+                                <div key={ing.ingredient_id}>
+                                  {ing.ingredient_name}: {(ing.quantity * parseFloat(cantidadProducida)).toFixed(2)} {ing.unit}
+                                </div>
+                              ))}
+                          </div>
+                        </div>
+
+                        <div className="border-t pt-4">
+                          <label className="text-sm font-semibold text-gray-700 mb-3 block">Selecciona lote para cada ingrediente *</label>
+                          <div className="space-y-3">
+                            {obtenerTodosLosIngredientes(
+                              formulas.find((f) => f.id === productoVariancia)?.ingredients || []
+                            ).map((ing) => (
+                              <div
+                                key={ing.id}
+                                style={{ marginLeft: `${ing.level * 20}px` }}
+                                className="space-y-2"
+                              >
+                                {ing.type === "RAW_MATERIAL" ? (
+                                  <div className="space-y-2">
+                                    <label className="text-sm font-semibold text-gray-700">
+                                      {ing.name}
+                                      {ing.stateName && (
+                                        <span className="ml-2 text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full font-medium">
+                                          Estado: {ing.stateName}
+                                        </span>
+                                      )}
+                                      <span className="text-xs text-gray-500 ml-2">
+                                        ({getRequiredQuantity(ing)} {batches.find((b) => b.id === ingredienteLotes[ing.id]?.[0]?.batchId)?.unit || "unidad"} requerido)
+                                      </span>
+                                    </label>
+
+                                    {/* Lista de lotes seleccionados */}
+                                    {ingredienteLotes[ing.id] && ingredienteLotes[ing.id].length > 0 && (
+                                      <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 space-y-2 text-sm">
+                                        <div className="font-semibold text-blue-900">
+                                          Lotes seleccionados ({ingredienteLotes[ing.id].length})
+                                        </div>
+                                        {ingredienteLotes[ing.id].map((selection, idx) => {
+                                          const batch = batches.find((b) => b.id === selection.batchId);
+                                          return (
+                                            <div key={idx} className="bg-white rounded p-2 border border-blue-200 flex justify-between items-center">
+                                              <div className="flex-1">
+                                                <div className="font-semibold text-gray-900">{batch?.lot_code}</div>
+                                                <div className="text-xs text-gray-600 space-y-1">
+                                                  <div>
+                                                    📦 <span className="font-semibold">Stock:</span> {batch?.quantity_out.toFixed(2)} {batch?.unit}
+                                                  </div>
+                                                  <div>
+                                                    💾 <span className="font-semibold">Usando:</span> {selection.quantity.toFixed(2)} {batch?.unit} × ${batch?.cost_per_unit.toFixed(2)}/u = $
+                                                    {(selection.quantity * (batch?.cost_per_unit || 0)).toFixed(2)}
+                                                  </div>
+                                                </div>
+                                              </div>
+                                              <button
+                                                onClick={() => {
+                                                  const updated = ingredienteLotes[ing.id].filter((_, i) => i !== idx);
+                                                  if (updated.length === 0) {
+                                                    const newLotes = { ...ingredienteLotes };
+                                                    delete newLotes[ing.id];
+                                                    setIngredienteLotes(newLotes);
+                                                  } else {
+                                                    setIngredienteLotes({
+                                                      ...ingredienteLotes,
+                                                      [ing.id]: updated,
+                                                    });
+                                                  }
+                                                }}
+                                                className="text-red-600 hover:text-red-800 font-semibold text-sm ml-2"
+                                              >
+                                                ✕
+                                              </button>
+                                            </div>
+                                          );
+                                        })}
+                                        {(() => {
+                                          const total = ingredienteLotes[ing.id].reduce((sum, s) => sum + s.quantity, 0);
+                                          const required = getRequiredQuantity(ing);
+                                          const unit = batches.find((b) => b.id === ingredienteLotes[ing.id][0]?.batchId)?.unit || "unidad";
+                                          const percentage = required > 0 ? (total / required) * 100 : 0;
+                                          const isExcess = total > required;
+                                          const isComplete = total >= required;
+
+                                          return (
+                                            <div className="border-t border-blue-200 pt-2 space-y-2">
+                                              <div className="flex justify-between items-center text-sm">
+                                                <span className="font-semibold text-blue-900">
+                                                  Total: {total.toFixed(2)} / {required.toFixed(2)} {unit}
+                                                </span>
+                                                <span
+                                                  className={`text-xs font-semibold px-2 py-1 rounded ${
+                                                    isExcess
+                                                      ? "bg-red-100 text-red-800"
+                                                      : isComplete
+                                                      ? "bg-green-100 text-green-800"
+                                                      : "bg-yellow-100 text-yellow-800"
+                                                  }`}
+                                                >
+                                                  {isExcess ? "⚠️ Exceso" : isComplete ? "✓ Completo" : `${Math.round(percentage)}%`}
+                                                </span>
+                                              </div>
+                                              <div className="w-full bg-gray-200 rounded-full h-2 overflow-hidden">
+                                                <div
+                                                  className={`h-full transition-all ${
+                                                    isExcess ? "bg-red-500" : isComplete ? "bg-green-500" : "bg-blue-500"
+                                                  }`}
+                                                  style={{ width: `${Math.min(percentage, 100)}%` }}
+                                                />
+                                              </div>
+                                              {isExcess && (
+                                                <div className="text-xs text-red-700 bg-red-50 p-2 rounded">
+                                                  ⚠️ Exceeds required by {(total - required).toFixed(2)} {unit}
+                                                </div>
+                                              )}
+                                            </div>
+                                          );
+                                        })()}
+                                      </div>
+                                    )}
+
+                                    {/* Selector para agregar más lotes */}
+                                    <div className="space-y-2">
+                                      <label className="text-xs font-semibold text-gray-600">Agregar lote</label>
+                                      <select
+                                        onChange={(e) => {
+                                          if (e.target.value) {
+                                            const newSelection = { batchId: e.target.value, quantity: 0 };
+                                            setIngredienteLotes({
+                                              ...ingredienteLotes,
+                                              [ing.id]: [...(ingredienteLotes[ing.id] || []), newSelection],
+                                            });
+                                            e.target.value = "";
+                                          }
+                                        }}
+                                        value=""
+                                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                      >
+                                        <option value="">Selecciona un lote...</option>
+                                        {(() => {
+                                          const filtered = batches
+                                            .filter((b) => b.raw_material_id === ing.parentId && b.quantity_out > 0)
+                                            .filter((b) => !ing.stateId || b.to_state_id === ing.stateId)
+                                            .filter((b) => !ingredienteLotes[ing.id]?.some((sel) => sel.batchId === b.id));
+
+                                          if (filtered.length === 0) {
+                                            return (
+                                              <option value="" disabled>
+                                                ⚠️ No hay lotes disponibles{ing.stateName ? ` en estado "${ing.stateName}"` : ""}
+                                              </option>
+                                            );
+                                          }
+
+                                          return filtered.map((batch) => (
+                                            <option key={batch.id} value={batch.id}>
+                                              📦 {batch.lot_code} | 📊 {batch.quantity_out.toFixed(2)} {batch.unit} | 💵 ${batch.cost_per_unit.toFixed(2)}/u {batch.state_name ? `| ${batch.state_name}` : ""}
+                                            </option>
+                                          ));
+                                        })()}
+                                      </select>
+                                    </div>
+
+                                    {/* Input de cantidad para el último lote agregado */}
+                                    {ingredienteLotes[ing.id] && ingredienteLotes[ing.id].length > 0 && (
+                                      <div className="space-y-1">
+                                        <label className="text-xs font-semibold text-gray-600">
+                                          Cantidad del último lote
+                                        </label>
+                                        <div className="flex gap-2">
+                                          <input
+                                            type="text"
+                                            inputMode="decimal"
+                                            value={rawQtyText[ing.id] ?? (ingredienteLotes[ing.id][ingredienteLotes[ing.id].length - 1].quantity === 0 ? "" : String(ingredienteLotes[ing.id][ingredienteLotes[ing.id].length - 1].quantity))}
+                                            onChange={(e) => {
+                                              const lastIdx = ingredienteLotes[ing.id].length - 1;
+                                              const rawValue = e.target.value;
+
+                                              // Solo permitir dígitos, punto y coma
+                                              if (!/^[\d.,]*$/.test(rawValue)) return;
+                                              // No más de un separador decimal
+                                              const normalized = rawValue.replace(",", ".");
+                                              if ((normalized.match(/\./g) || []).length > 1) return;
+
+                                              // Guardar el texto tal cual (permite "0.", "0.0", etc.)
+                                              setRawQtyText({ ...rawQtyText, [ing.id]: rawValue });
+
+                                              // Solo actualizar el número cuando sea parseable
+                                              const numValue = parseFloat(normalized);
+                                              if (!isNaN(numValue)) {
+                                                const updated = [...ingredienteLotes[ing.id]];
+                                                updated[lastIdx].quantity = numValue;
+                                                setIngredienteLotes({ ...ingredienteLotes, [ing.id]: updated });
+                                              }
+                                            }}
+                                            onBlur={() => {
+                                              // Al salir, limpiar el texto raw para que muestre el número final
+                                              setRawQtyText((prev) => {
+                                                const next = { ...prev };
+                                                delete next[ing.id];
+                                                return next;
+                                              });
+                                            }}
+                                            placeholder="0.00"
+                                            className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                          />
+                                          <div className="text-xs text-gray-600 bg-gray-50 rounded px-2 py-2 whitespace-nowrap">
+                                            {(() => {
+                                              const lastIdx = ingredienteLotes[ing.id].length - 1;
+                                              const batch = batches.find(
+                                                (b) => b.id === ingredienteLotes[ing.id][lastIdx].batchId
+                                              );
+                                              const qtyInOtherBatches = ingredienteLotes[ing.id]
+                                                .slice(0, lastIdx)
+                                                .reduce((sum, sel) => sum + sel.quantity, 0);
+                                              const required = getRequiredQuantity(ing);
+                                              const maxByFormula = required - qtyInOtherBatches;
+                                              const maxByBatch = batch?.quantity_out || 0;
+                                              const maxQty = Math.min(maxByFormula, maxByBatch);
+                                              return `Máx: ${maxQty.toFixed(2)}`;
+                                            })()}
+                                          </div>
+                                        </div>
+                                      </div>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <div className="p-2 bg-blue-50 border-l-4 border-blue-300 rounded text-sm text-blue-900">
+                                    <div className="font-semibold">📦 {ing.name}</div>
+                                    <div className="text-xs text-blue-700">
+                                      {ing.level === 0 ? "Producto principal" : "Producto anidado"}
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+
+                        <button
+                          className="btn btn-primary w-full"
+                          onClick={calcularVarianciaCostos}
+                          disabled={
+                            !Object.keys(ingredienteLotes).length ||
+                            Object.keys(ingredienteLotes).length !==
+                              obtenerTodosLosIngredientes(
+                                formulas.find((f) => f.id === productoVariancia)?.ingredients || []
+                              ).filter((ing) => ing.type === "RAW_MATERIAL").length ||
+                            Object.values(ingredienteLotes).some(
+                              (selections) =>
+                                selections.length === 0 ||
+                                selections.some((sel) => !sel.batchId || !sel.quantity || sel.quantity <= 0)
+                            )
+                          }
+                        >
+                          Calcular Costos
+                        </button>
+                      </>
+                    )}
+                  </>
+                )}
+              </>
+            ) : (
+              <>
+                <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+                  <div className="font-semibold text-green-900 mb-2">✓ Desglose de Costos</div>
+                  <div className="grid grid-cols-2 gap-4 text-sm">
+                    <div>
+                      <span className="text-gray-600">Producto:</span>
+                      <div className="font-semibold">{varianciaResultado.producto_nombre}</div>
+                    </div>
+                    <div>
+                      <span className="text-gray-600">Cantidad:</span>
+                      <div className="font-semibold">{varianciaResultado.cantidad_producida} unidades</div>
+                    </div>
+                    <div>
+                      <span className="text-gray-600">Costo Total:</span>
+                      <div className="font-semibold text-green-700">${varianciaResultado.cost_estimated.toFixed(2)}</div>
+                    </div>
+                    <div>
+                      <span className="text-gray-600">Costo/Unidad:</span>
+                      <div className="font-semibold text-green-700">${varianciaResultado.cost_per_unit.toFixed(2)}</div>
+                    </div>
+                  </div>
+                </div>
+
+                <div>
+                  <CostBreakdown
+                    breakdown={varianciaResultado.cost_breakdown}
+                    totalCost={varianciaResultado.cost_estimated}
+                    costPerUnit={varianciaResultado.cost_per_unit}
+                    unit="unidad"
+                    showVariance={false}
+                  />
+                </div>
+
+                <div className="flex gap-2">
+                  <button
+                    className="btn btn-primary flex-1"
+                    onClick={guardarVariancia}
+                    disabled={savingVariancia}
+                  >
+                    {savingVariancia ? "Guardando..." : "✓ Registrar Variancia"}
+                  </button>
+                  <button
+                    className="btn btn-secondary flex-1"
+                    onClick={() => {
+                      setVarianciaResultado(null);
+                      setIngredienteLotes({});
+                    }}
+                    disabled={savingVariancia}
+                  >
+                    Modificar
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </CostsModal>
+
         {/* ────── TAB: REPORTES ────── */}
         {activeTab === "reportes" && (
           <div className="space-y-6">
@@ -3885,6 +5164,21 @@ export default function AdminCostosPage() {
                 }}
               >
                 📈 Variancia
+              </button>
+              <button
+                className={`px-4 py-2 rounded-lg font-medium transition ${
+                  reportesTab === "costos"
+                    ? "bg-blue-100 text-blue-700"
+                    : "text-gray-600 hover:bg-gray-100"
+                }`}
+                onClick={() => {
+                  setReportesTab("costos");
+                  if (dataVariancia.length === 0) {
+                    cargarReportes();
+                  }
+                }}
+              >
+                💰 Costos
               </button>
             </div>
 
@@ -4050,6 +5344,218 @@ export default function AdminCostosPage() {
             )}
 
             {/* VARIANCIA */}
+            {/* ── REPORTE DE COSTOS ── */}
+            {reportesTab === "costos" && (() => {
+              // Filtrar dataVariancia por producto y fechas
+              const base = dataVariancia.filter((row: any) => {
+                if (reportesCostosFiltroProducto && row.product_id !== reportesCostosFiltroProducto) return false;
+                if (reportesCostosFiltroDesde) {
+                  const rowDate = new Date(row.variance_date ?? row.created_at);
+                  if (rowDate < new Date(reportesCostosFiltroDesde)) return false;
+                }
+                if (reportesCostosFiltroHasta) {
+                  const rowDate = new Date(row.variance_date ?? row.created_at);
+                  if (rowDate > new Date(reportesCostosFiltroHasta + "T23:59:59")) return false;
+                }
+                return true;
+              });
+
+              // KPIs por producto
+              const byProduct: Record<string, { name: string; rows: any[] }> = {};
+              for (const row of base) {
+                if (!byProduct[row.product_id]) byProduct[row.product_id] = { name: row.product_name, rows: [] };
+                byProduct[row.product_id].rows.push(row);
+              }
+              const productStats = Object.entries(byProduct).map(([pid, { name, rows }]) => {
+                const costos = rows.map((r: any) => r.cost_per_unit ?? (r.quantity_produced > 0 ? r.cost_estimated / r.quantity_produced : 0));
+                const avg = costos.length > 0 ? costos.reduce((a, b) => a + b, 0) / costos.length : 0;
+                const min = costos.length > 0 ? Math.min(...costos) : 0;
+                const max = costos.length > 0 ? Math.max(...costos) : 0;
+                const totalUnidades = rows.reduce((s: number, r: any) => s + (r.quantity_produced ?? 0), 0);
+                const totalCosto = rows.reduce((s: number, r: any) => s + (r.cost_estimated ?? 0), 0);
+                return { pid, name, avg, min, max, totalUnidades, totalCosto, count: rows.length };
+              }).sort((a, b) => b.avg - a.avg);
+
+              const masCaros = productStats.slice(0, 3);
+              const masBaratos = [...productStats].sort((a, b) => a.avg - b.avg).slice(0, 3);
+              const totalGlobalCosto = base.reduce((s: number, r: any) => s + (r.cost_estimated ?? 0), 0);
+              const totalGlobalUnidades = base.reduce((s: number, r: any) => s + (r.quantity_produced ?? 0), 0);
+
+              return (
+                <div className="space-y-6">
+                  <h3 className="text-xl font-bold text-gray-900">💰 Reporte de Costos de Producción</h3>
+
+                  {/* Filtros */}
+                  <div className="bg-gray-50 border border-gray-200 rounded-xl p-4 space-y-3">
+                    <div className="text-sm font-semibold text-gray-700">Filtros</div>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <div>
+                        <label className="text-xs text-gray-600 mb-1 block">Producto</label>
+                        <select
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          value={reportesCostosFiltroProducto}
+                          onChange={(e) => setReportesCostosFiltroProducto(e.target.value)}
+                        >
+                          <option value="">— Todos —</option>
+                          {Array.from(new Set(dataVariancia.map((r: any) => r.product_id))).map((pid: any) => {
+                            const name = dataVariancia.find((r: any) => r.product_id === pid)?.product_name ?? pid;
+                            return <option key={pid} value={pid}>{name}</option>;
+                          })}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-xs text-gray-600 mb-1 block">Desde</label>
+                        <input
+                          type="date"
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          value={reportesCostosFiltroDesde}
+                          onChange={(e) => setReportesCostosFiltroDesde(e.target.value)}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs text-gray-600 mb-1 block">Hasta</label>
+                        <input
+                          type="date"
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          value={reportesCostosFiltroHasta}
+                          onChange={(e) => setReportesCostosFiltroHasta(e.target.value)}
+                        />
+                      </div>
+                    </div>
+                    {(reportesCostosFiltroProducto || reportesCostosFiltroDesde || reportesCostosFiltroHasta) && (
+                      <button
+                        className="text-xs text-blue-600 hover:underline"
+                        onClick={() => { setReportesCostosFiltroProducto(""); setReportesCostosFiltroDesde(""); setReportesCostosFiltroHasta(""); }}
+                      >
+                        Limpiar filtros
+                      </button>
+                    )}
+                  </div>
+
+                  {loadingReportes ? (
+                    <p className="text-gray-500">Cargando...</p>
+                  ) : base.length === 0 ? (
+                    <div className="text-center py-10 text-gray-400">
+                      <div className="text-4xl mb-2">📭</div>
+                      <p>Sin datos para el filtro seleccionado</p>
+                    </div>
+                  ) : (
+                    <>
+                      {/* KPIs globales */}
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                        <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 text-center">
+                          <div className="text-xs text-gray-500 mb-1">Producciones</div>
+                          <div className="text-2xl font-bold text-blue-700">{base.length}</div>
+                        </div>
+                        <div className="bg-green-50 border border-green-200 rounded-xl p-4 text-center">
+                          <div className="text-xs text-gray-500 mb-1">Unidades producidas</div>
+                          <div className="text-2xl font-bold text-green-700">{totalGlobalUnidades}</div>
+                        </div>
+                        <div className="bg-purple-50 border border-purple-200 rounded-xl p-4 text-center">
+                          <div className="text-xs text-gray-500 mb-1">Costo total</div>
+                          <div className="text-lg font-bold text-purple-700">
+                            ${totalGlobalCosto.toLocaleString("es-CO", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                          </div>
+                        </div>
+                        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-center">
+                          <div className="text-xs text-gray-500 mb-1">Costo/unidad prom.</div>
+                          <div className="text-lg font-bold text-amber-700">
+                            ${totalGlobalUnidades > 0
+                              ? (totalGlobalCosto / totalGlobalUnidades).toLocaleString("es-CO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+                              : "—"}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Más caros / más baratos */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div className="bg-white border border-gray-200 rounded-xl p-4">
+                          <div className="font-semibold text-gray-700 mb-3 flex items-center gap-2">
+                            🔴 Productos con mayor costo/unidad
+                          </div>
+                          <div className="space-y-2">
+                            {masCaros.map((p, i) => (
+                              <div key={p.pid} className="flex items-center justify-between text-sm">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-gray-400 font-mono w-4">{i + 1}.</span>
+                                  <span className="font-medium text-gray-900 truncate max-w-[140px]">{p.name}</span>
+                                </div>
+                                <span className="font-bold text-red-700">
+                                  ${p.avg.toLocaleString("es-CO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                </span>
+                              </div>
+                            ))}
+                            {masCaros.length === 0 && <p className="text-xs text-gray-400">Sin datos</p>}
+                          </div>
+                        </div>
+
+                        <div className="bg-white border border-gray-200 rounded-xl p-4">
+                          <div className="font-semibold text-gray-700 mb-3 flex items-center gap-2">
+                            🟢 Productos con menor costo/unidad
+                          </div>
+                          <div className="space-y-2">
+                            {masBaratos.map((p, i) => (
+                              <div key={p.pid} className="flex items-center justify-between text-sm">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-gray-400 font-mono w-4">{i + 1}.</span>
+                                  <span className="font-medium text-gray-900 truncate max-w-[140px]">{p.name}</span>
+                                </div>
+                                <span className="font-bold text-green-700">
+                                  ${p.avg.toLocaleString("es-CO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                </span>
+                              </div>
+                            ))}
+                            {masBaratos.length === 0 && <p className="text-xs text-gray-400">Sin datos</p>}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Tabla completa por producto */}
+                      <div>
+                        <div className="font-semibold text-gray-700 mb-3">Detalle por producto</div>
+                        <div className="overflow-x-auto rounded-xl border border-gray-200">
+                          <table className="w-full text-sm">
+                            <thead className="bg-gray-50 text-gray-600 text-xs uppercase">
+                              <tr>
+                                <th className="px-4 py-3 text-left">Producto</th>
+                                <th className="px-4 py-3 text-right">Producciones</th>
+                                <th className="px-4 py-3 text-right">Unidades</th>
+                                <th className="px-4 py-3 text-right">Costo/ud mín</th>
+                                <th className="px-4 py-3 text-right">Costo/ud prom</th>
+                                <th className="px-4 py-3 text-right">Costo/ud máx</th>
+                                <th className="px-4 py-3 text-right">Costo total</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-100">
+                              {productStats.map((p) => (
+                                <tr key={p.pid} className="hover:bg-gray-50">
+                                  <td className="px-4 py-3 font-medium text-gray-900">{p.name}</td>
+                                  <td className="px-4 py-3 text-right text-gray-600">{p.count}</td>
+                                  <td className="px-4 py-3 text-right text-gray-600">{p.totalUnidades}</td>
+                                  <td className="px-4 py-3 text-right text-green-700">
+                                    ${p.min.toLocaleString("es-CO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                  </td>
+                                  <td className="px-4 py-3 text-right font-bold text-blue-700">
+                                    ${p.avg.toLocaleString("es-CO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                  </td>
+                                  <td className="px-4 py-3 text-right text-red-700">
+                                    ${p.max.toLocaleString("es-CO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                  </td>
+                                  <td className="px-4 py-3 text-right font-bold text-gray-900">
+                                    ${p.totalCosto.toLocaleString("es-CO", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </div>
+              );
+            })()}
+
             {reportesTab === "variancia" && (
               <div className="space-y-6">
                 <h3 className="text-xl font-bold text-gray-900">Análisis de Variancia</h3>
@@ -4137,150 +5643,581 @@ export default function AdminCostosPage() {
             )}
           </div>
         )}
-        {activeTab === "alertas" && (
+        {/* ────── TAB: HISTORIAL DE COSTOS (Opción D) ────── */}
+        {activeTab === "historial" && (
           <div className="space-y-6">
-            {/* Guía de uso */}
-            <div className="bg-blue-100 border border-blue-300 rounded-lg p-4 text-sm text-blue-900">
-              <div className="font-semibold mb-2 flex items-center gap-2">
-                <Info size={18} />
-                Como usar esta sección
-              </div>
-              <ol className="list-decimal list-inside space-y-1 text-xs">
-                <li>Las alertas se generan automáticamente según el estado del sistema</li>
-                <li>Alertas rojo/críticas: Requieren atención inmediata (stock bajo, errores)</li>
-                <li>Alertas amarillo/advertencia: Requieren revisión pronta</li>
-                <li>Usa el botón "Recargar" para actualizar el estado de las alertas</li>
-                <li>Marca alertas como leídas para mantener el sistema limpio</li>
-              </ol>
-            </div>
-
-            {/* Encabezado con botón cargar */}
+            {/* Encabezado */}
             <div className="flex justify-between items-center">
-              <h3 className="text-xl font-bold text-gray-900">
-                Alertas {alertasNoLeidas > 0 && (
-                  <span className="ml-2 inline-block bg-red-100 text-red-700 px-3 py-1 rounded-full text-sm font-semibold">
-                    {alertasNoLeidas} nuevas
-                  </span>
-                )}
-              </h3>
+              <div>
+                <h3 className="text-xl font-bold text-gray-900">📊 Historial de Costos</h3>
+                <p className="text-sm text-gray-500 mt-1">Consulta el costo de producción por producto a lo largo del tiempo</p>
+              </div>
               <button
                 className="btn btn-primary text-sm"
-                onClick={obtenerAlertas}
-                disabled={loadingAlertas}
+                onClick={cargarHistorial}
+                disabled={loadingHistorialCostos}
               >
-                {loadingAlertas ? "Cargando..." : "🔄 Recargar"}
+                {loadingHistorialCostos ? "Cargando..." : "🔄 Actualizar"}
               </button>
             </div>
 
-            {/* Filtros */}
-            <div className="flex gap-2">
-              <button
-                className={`px-4 py-2 rounded-lg text-sm font-medium transition ${
-                  filtroAlertas === "todas"
-                    ? "bg-blue-100 text-blue-700"
-                    : "bg-gray-100 text-gray-700 hover:bg-gray-200"
-                }`}
-                onClick={() => setFiltroAlertas("todas")}
-              >
-                Todas
-              </button>
-              <button
-                className={`px-4 py-2 rounded-lg text-sm font-medium transition ${
-                  filtroAlertas === "red"
-                    ? "bg-red-100 text-red-700"
-                    : "bg-gray-100 text-gray-700 hover:bg-gray-200"
-                }`}
-                onClick={() => setFiltroAlertas("red")}
-              >
-                🔴 Críticas
-              </button>
-              <button
-                className={`px-4 py-2 rounded-lg text-sm font-medium transition ${
-                  filtroAlertas === "yellow"
-                    ? "bg-yellow-100 text-yellow-700"
-                    : "bg-gray-100 text-gray-700 hover:bg-gray-200"
-                }`}
-                onClick={() => setFiltroAlertas("yellow")}
-              >
-                🟡 Advertencias
-              </button>
+            {/* Sub-tabs */}
+            <div className="flex gap-2 border-b border-gray-200">
+              {([
+                { id: "por-producto", label: "📋 Por Producto" },
+                { id: "variancia-acumulada", label: "📉 Variancia Acumulada" },
+                { id: "tendencias", label: "📈 Tendencias" },
+              ] as const).map((t) => (
+                <button
+                  key={t.id}
+                  className={`px-4 py-2 rounded-t-lg font-medium text-sm transition -mb-px border-b-2 ${
+                    historialTab === t.id
+                      ? "border-blue-600 text-blue-700"
+                      : "border-transparent text-gray-500 hover:text-gray-700"
+                  }`}
+                  onClick={() => setHistorialTab(t.id)}
+                >
+                  {t.label}
+                </button>
+              ))}
             </div>
 
-            {/* Tabla de alertas */}
-            {loadingAlertas ? (
-              <p className="text-gray-500">Cargando alertas...</p>
-            ) : alertas.length === 0 ? (
-              <div className="rounded-2xl border-2 border-dashed border-green-300 p-12 text-center bg-green-50">
-                <Bell size={60} className="mx-auto mb-4 text-green-300" strokeWidth={1.5} />
-                <h3 className="text-xl font-bold text-green-900 mb-2">Sin alertas activas</h3>
-                <p className="text-green-700">Todo está bajo control ✓</p>
+            {/* Filtro de producto (compartido entre sub-tabs) */}
+            <div className="flex gap-3 items-center">
+              <label className="text-sm font-semibold text-gray-700 whitespace-nowrap">Filtrar por producto:</label>
+              <select
+                className="flex-1 max-w-xs px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                value={historialProductoFiltro}
+                onChange={(e) => setHistorialProductoFiltro(e.target.value)}
+              >
+                <option value="">— Todos los productos —</option>
+                {Array.from(new Set(historialData.map((d) => d.product_id))).map((pid) => {
+                  const name = historialData.find((d) => d.product_id === pid)?.product_name ?? pid;
+                  return <option key={pid as string} value={pid as string}>{name}</option>;
+                })}
+              </select>
+              {historialProductoFiltro && (
+                <button
+                  className="text-xs text-gray-500 hover:text-gray-700 underline"
+                  onClick={() => setHistorialProductoFiltro("")}
+                >
+                  Limpiar
+                </button>
+              )}
+            </div>
+
+            {loadingHistorialCostos ? (
+              <div className="text-center py-12 text-gray-500">Cargando historial...</div>
+            ) : historialData.length === 0 ? (
+              <div className="text-center py-12 text-gray-400">
+                <div className="text-4xl mb-3">📭</div>
+                <p className="font-semibold">Sin registros</p>
+                <p className="text-sm mt-1">Registra una producción en Opción C para ver el historial aquí</p>
               </div>
             ) : (
-              <div className="overflow-x-auto rounded-2xl border border-gray-200">
-                <table className="w-full text-sm">
-                  <thead className="bg-gray-50 border-b border-gray-200">
-                    <tr>
-                      <th className="px-4 py-3 text-left font-semibold text-gray-900">Severidad</th>
-                      <th className="px-4 py-3 text-left font-semibold text-gray-900">Tipo</th>
-                      <th className="px-4 py-3 text-left font-semibold text-gray-900">Mensaje</th>
-                      <th className="px-4 py-3 text-left font-semibold text-gray-900">Fecha</th>
-                      <th className="px-4 py-3 text-center font-semibold text-gray-900">Acciones</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {alertas
-                      .filter((a) => filtroAlertas === "todas" || a.severity === filtroAlertas)
-                      .map((alerta: any, idx: number) => (
-                        <tr
-                          key={alerta.id}
-                          className={`${
-                            idx % 2 === 0 ? "bg-white" : "bg-gray-50"
-                          } ${!alerta.is_read ? "border-l-4 border-l-blue-500" : ""}`}
-                        >
-                          <td className="px-4 py-3">
-                            {alerta.severity === "red" ? (
-                              <span className="text-2xl">🔴</span>
-                            ) : (
-                              <span className="text-2xl">🟡</span>
+              <>
+                {/* ── SUB-TAB: POR PRODUCTO ── */}
+                {historialTab === "por-producto" && (() => {
+                  const filtrado = historialProductoFiltro
+                    ? historialData.filter((d) => d.product_id === historialProductoFiltro)
+                    : historialData;
+
+                  return (
+                    <div className="space-y-4">
+                      <p className="text-xs text-gray-500">{filtrado.length} registros encontrados</p>
+                      <div className="overflow-x-auto rounded-xl border border-gray-200">
+                        <table className="w-full text-sm">
+                          <thead className="bg-gray-50 text-gray-600 text-xs uppercase">
+                            <tr>
+                              <th className="px-4 py-3 text-left">Fecha</th>
+                              <th className="px-4 py-3 text-left">Producto</th>
+                              <th className="px-4 py-3 text-right">Cantidad</th>
+                              <th className="px-4 py-3 text-right">Costo/Unidad</th>
+                              <th className="px-4 py-3 text-right">Costo Total</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-100">
+                            {filtrado.map((row: any, idx: number) => (
+                              <tr key={row.id ?? idx} className="hover:bg-gray-50">
+                                <td className="px-4 py-3 text-gray-600 whitespace-nowrap">{row.fecha_display}</td>
+                                <td className="px-4 py-3 font-medium text-gray-900">{row.product_name}</td>
+                                <td className="px-4 py-3 text-right text-gray-700">{row.quantity_produced}</td>
+                                <td className="px-4 py-3 text-right font-semibold text-blue-700">
+                                  ${(row.cost_per_unit ?? 0).toLocaleString("es-CO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                </td>
+                                <td className="px-4 py-3 text-right font-bold text-green-700">
+                                  ${(row.cost_estimated ?? 0).toLocaleString("es-CO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                          <tfoot className="bg-gray-50 border-t-2 border-gray-200">
+                            <tr>
+                              <td colSpan={2} className="px-4 py-3 font-bold text-gray-700">Total</td>
+                              <td className="px-4 py-3 text-right font-bold text-gray-900">
+                                {filtrado.reduce((s: number, r: any) => s + (r.quantity_produced ?? 0), 0)} uds
+                              </td>
+                              <td className="px-4 py-3 text-right text-gray-500 text-xs">
+                                Prom: ${filtrado.length > 0
+                                  ? (filtrado.reduce((s: number, r: any) => s + (r.cost_per_unit ?? 0), 0) / filtrado.length).toLocaleString("es-CO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+                                  : "0.00"}
+                              </td>
+                              <td className="px-4 py-3 text-right font-bold text-green-700">
+                                ${filtrado.reduce((s: number, r: any) => s + (r.cost_estimated ?? 0), 0).toLocaleString("es-CO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                              </td>
+                            </tr>
+                          </tfoot>
+                        </table>
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* ── SUB-TAB: VARIANCIA ACUMULADA ── */}
+                {historialTab === "variancia-acumulada" && (() => {
+                  // Agrupar por producto
+                  const byProduct: Record<string, any[]> = {};
+                  for (const row of historialData) {
+                    if (historialProductoFiltro && row.product_id !== historialProductoFiltro) continue;
+                    if (!byProduct[row.product_id]) byProduct[row.product_id] = [];
+                    byProduct[row.product_id].push(row);
+                  }
+
+                  return (
+                    <div className="space-y-4">
+                      {Object.entries(byProduct).map(([pid, rows]) => {
+                        const nombre = rows[0]?.product_name ?? pid;
+                        const totalUnidades = rows.reduce((s, r) => s + (r.quantity_produced ?? 0), 0);
+                        const totalCosto = rows.reduce((s, r) => s + (r.cost_estimated ?? 0), 0);
+                        const costos = rows.map((r) => r.cost_per_unit ?? 0).filter((c) => c > 0);
+                        const costoMin = costos.length > 0 ? Math.min(...costos) : 0;
+                        const costoMax = costos.length > 0 ? Math.max(...costos) : 0;
+                        const costoPromedio = costos.length > 0 ? costos.reduce((a, b) => a + b, 0) / costos.length : 0;
+                        const variacionPct = costoMin > 0 ? ((costoMax - costoMin) / costoMin * 100) : 0;
+
+                        return (
+                          <div key={pid} className="bg-white border border-gray-200 rounded-xl p-5 space-y-4">
+                            <div className="flex items-center justify-between">
+                              <h4 className="font-bold text-gray-900 text-lg">{nombre}</h4>
+                              <span className="text-xs text-gray-500">{rows.length} producciones registradas</span>
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                              <div className="bg-blue-50 rounded-lg p-3 text-center">
+                                <div className="text-xs text-gray-500 mb-1">Total unidades</div>
+                                <div className="text-xl font-bold text-blue-700">{totalUnidades}</div>
+                              </div>
+                              <div className="bg-green-50 rounded-lg p-3 text-center">
+                                <div className="text-xs text-gray-500 mb-1">Costo total</div>
+                                <div className="text-lg font-bold text-green-700">
+                                  ${totalCosto.toLocaleString("es-CO", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                                </div>
+                              </div>
+                              <div className="bg-purple-50 rounded-lg p-3 text-center">
+                                <div className="text-xs text-gray-500 mb-1">Costo/unidad prom.</div>
+                                <div className="text-lg font-bold text-purple-700">
+                                  ${costoPromedio.toLocaleString("es-CO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                </div>
+                              </div>
+                              <div className={`rounded-lg p-3 text-center ${variacionPct > 15 ? "bg-red-50" : "bg-emerald-50"}`}>
+                                <div className="text-xs text-gray-500 mb-1">Variación de costo</div>
+                                <div className={`text-lg font-bold ${variacionPct > 15 ? "text-red-700" : "text-emerald-700"}`}>
+                                  {variacionPct.toFixed(1)}%
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="flex gap-4 text-sm text-gray-600">
+                              <span>Costo mín: <strong className="text-gray-900">${costoMin.toLocaleString("es-CO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong></span>
+                              <span>Costo máx: <strong className="text-gray-900">${costoMax.toLocaleString("es-CO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong></span>
+                            </div>
+
+                            {variacionPct > 15 && (
+                              <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg p-2">
+                                ⚠️ Variación alta ({variacionPct.toFixed(1)}%): Los costos de este producto fluctúan significativamente. Revisa los precios de las materias primas.
+                              </div>
                             )}
-                          </td>
-                          <td className="px-4 py-3 font-medium text-gray-900">
-                            {alerta.type === "merma_anormal"
-                              ? "Merma Anormal"
-                              : alerta.type === "stock_bajo"
-                              ? "Stock Bajo"
-                              : "Sin Stock"}
-                          </td>
-                          <td className="px-4 py-3 text-gray-700">{alerta.message}</td>
-                          <td className="px-4 py-3 text-gray-600 text-xs">
-                            {new Date(alerta.created_at).toLocaleDateString()} <br />
-                            {new Date(alerta.created_at).toLocaleTimeString([], {
-                              hour: "2-digit",
-                              minute: "2-digit",
-                            })}
-                          </td>
-                          <td className="px-4 py-3 text-center space-x-2">
-                            {!alerta.is_read && (
-                              <button
-                                className="text-blue-600 hover:text-blue-800 font-medium text-xs"
-                                onClick={() => marcarAlertaLeida(alerta.id)}
-                                title="Marcar como leída"
-                              >
-                                ✓
-                              </button>
+                          </div>
+                        );
+                      })}
+
+                      {Object.keys(byProduct).length === 0 && (
+                        <div className="text-center py-8 text-gray-400 text-sm">
+                          No hay datos para el filtro seleccionado
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+
+                {/* ── SUB-TAB: TENDENCIAS ── */}
+                {historialTab === "tendencias" && (() => {
+                  const byProduct: Record<string, any[]> = {};
+                  for (const row of [...historialData].reverse()) {
+                    if (historialProductoFiltro && row.product_id !== historialProductoFiltro) continue;
+                    if (!byProduct[row.product_id]) byProduct[row.product_id] = [];
+                    byProduct[row.product_id].push(row);
+                  }
+
+                  return (
+                    <div className="space-y-6">
+                      {Object.entries(byProduct).map(([pid, rows]) => {
+                        const nombre = rows[0]?.product_name ?? pid;
+                        const costos = rows.map((r) => r.cost_per_unit ?? 0);
+                        const maxCosto = Math.max(...costos, 1);
+
+                        // Tendencia: comparar primera mitad vs segunda mitad
+                        const mitad = Math.floor(rows.length / 2);
+                        const promPrimera = mitad > 0
+                          ? costos.slice(0, mitad).reduce((a, b) => a + b, 0) / mitad
+                          : costos[0] ?? 0;
+                        const promSegunda = costos.length - mitad > 0
+                          ? costos.slice(mitad).reduce((a, b) => a + b, 0) / (costos.length - mitad)
+                          : costos[costos.length - 1] ?? 0;
+                        const tendencia = promSegunda - promPrimera;
+
+                        return (
+                          <div key={pid} className="bg-white border border-gray-200 rounded-xl p-5 space-y-4">
+                            <div className="flex items-center justify-between">
+                              <h4 className="font-bold text-gray-900">{nombre}</h4>
+                              <span className={`text-sm font-semibold px-3 py-1 rounded-full ${
+                                tendencia < -0.5 ? "bg-green-100 text-green-700"
+                                : tendencia > 0.5 ? "bg-red-100 text-red-700"
+                                : "bg-gray-100 text-gray-600"
+                              }`}>
+                                {tendencia < -0.5 ? "↓ Bajando" : tendencia > 0.5 ? "↑ Subiendo" : "→ Estable"}
+                              </span>
+                            </div>
+
+                            {/* Mini gráfico de barras */}
+                            <div className="space-y-1">
+                              <div className="text-xs text-gray-500 mb-2">Costo por unidad — evolución cronológica</div>
+                              <div className="flex items-end gap-1 h-24">
+                                {rows.map((row, idx) => {
+                                  const pct = maxCosto > 0 ? (row.cost_per_unit ?? 0) / maxCosto : 0;
+                                  const height = Math.max(4, Math.round(pct * 96));
+                                  const isLast = idx === rows.length - 1;
+                                  return (
+                                    <div
+                                      key={row.id ?? idx}
+                                      className="flex-1 flex flex-col items-center justify-end group relative"
+                                      title={`${row.fecha_display}: $${(row.cost_per_unit ?? 0).toLocaleString("es-CO", { minimumFractionDigits: 2 })}`}
+                                    >
+                                      <div
+                                        className={`w-full rounded-t transition-all ${
+                                          isLast ? "bg-blue-500" : pct > 0.85 ? "bg-red-400" : pct < 0.5 ? "bg-green-400" : "bg-blue-300"
+                                        }`}
+                                        style={{ height: `${height}px` }}
+                                      />
+                                      <div className="absolute -top-6 left-1/2 -translate-x-1/2 bg-gray-800 text-white text-xs px-1.5 py-0.5 rounded opacity-0 group-hover:opacity-100 whitespace-nowrap z-10">
+                                        ${(row.cost_per_unit ?? 0).toLocaleString("es-CO", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                              <div className="flex justify-between text-xs text-gray-400">
+                                <span>{rows[0]?.fecha_display}</span>
+                                <span>{rows[rows.length - 1]?.fecha_display}</span>
+                              </div>
+                            </div>
+
+                            {rows.length < 3 && (
+                              <p className="text-xs text-gray-400 italic">
+                                💡 Se necesitan al menos 3 producciones para ver una tendencia clara
+                              </p>
                             )}
-                            <button
-                              className="text-red-600 hover:text-red-800 font-medium text-xs"
-                              onClick={() => eliminarAlerta(alerta.id)}
-                              title="Eliminar"
-                            >
-                              ✕
-                            </button>
-                          </td>
+                          </div>
+                        );
+                      })}
+
+                      {Object.keys(byProduct).length === 0 && (
+                        <div className="text-center py-8 text-gray-400 text-sm">
+                          No hay datos para el filtro seleccionado
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+              </>
+            )}
+          </div>
+        )}
+
+        {activeTab === "alertas" && (
+          <div className="space-y-6">
+            {/* Sub-tabs */}
+            <div className="flex gap-2 border-b border-gray-200">
+              <button
+                className={`px-4 py-2 text-sm font-semibold border-b-2 transition -mb-px ${
+                  alertasTab === "notificaciones" ? "border-blue-600 text-blue-700" : "border-transparent text-gray-500 hover:text-gray-700"
+                }`}
+                onClick={() => setAlertasTab("notificaciones")}
+              >
+                🔔 Notificaciones {alertasNoLeidas > 0 && (
+                  <span className="ml-1 bg-red-500 text-white text-xs px-1.5 py-0.5 rounded-full">{alertasNoLeidas}</span>
+                )}
+              </button>
+              <button
+                className={`px-4 py-2 text-sm font-semibold border-b-2 transition -mb-px ${
+                  alertasTab === "configurar" ? "border-blue-600 text-blue-700" : "border-transparent text-gray-500 hover:text-gray-700"
+                }`}
+                onClick={() => { setAlertasTab("configurar"); if (thresholds.length === 0) cargarThresholds(); }}
+              >
+                ⚙️ Configurar Umbrales
+              </button>
+            </div>
+
+            {/* ── SUB-TAB: NOTIFICACIONES ── */}
+            {alertasTab === "notificaciones" && (
+              <div className="space-y-4">
+                <div className="flex justify-between items-center">
+                  <h3 className="text-xl font-bold text-gray-900">
+                    Alertas {alertasNoLeidas > 0 && (
+                      <span className="ml-2 inline-block bg-red-100 text-red-700 px-3 py-1 rounded-full text-sm font-semibold">
+                        {alertasNoLeidas} nuevas
+                      </span>
+                    )}
+                  </h3>
+                  <button className="btn btn-primary text-sm" onClick={obtenerAlertas} disabled={loadingAlertas}>
+                    {loadingAlertas ? "Cargando..." : "🔄 Recargar"}
+                  </button>
+                </div>
+
+                <div className="flex gap-2">
+                  {(["todas", "red", "yellow"] as const).map((f) => (
+                    <button
+                      key={f}
+                      className={`px-4 py-2 rounded-lg text-sm font-medium transition ${
+                        filtroAlertas === f ? "bg-blue-100 text-blue-700" : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                      }`}
+                      onClick={() => setFiltroAlertas(f)}
+                    >
+                      {f === "todas" ? "Todas" : f === "red" ? "🔴 Críticas" : "🟡 Advertencias"}
+                    </button>
+                  ))}
+                </div>
+
+                {loadingAlertas ? (
+                  <p className="text-gray-500">Cargando alertas...</p>
+                ) : alertas.filter((a) => filtroAlertas === "todas" || a.severity === filtroAlertas).length === 0 ? (
+                  <div className="rounded-2xl border-2 border-dashed border-green-300 p-12 text-center bg-green-50">
+                    <Bell size={60} className="mx-auto mb-4 text-green-300" strokeWidth={1.5} />
+                    <h3 className="text-xl font-bold text-green-900 mb-2">Sin alertas activas</h3>
+                    <p className="text-green-700">Todo está bajo control ✓</p>
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto rounded-2xl border border-gray-200">
+                    <table className="w-full text-sm">
+                      <thead className="bg-gray-50 border-b border-gray-200">
+                        <tr>
+                          <th className="px-4 py-3 text-left font-semibold text-gray-900">Severidad</th>
+                          <th className="px-4 py-3 text-left font-semibold text-gray-900">Tipo</th>
+                          <th className="px-4 py-3 text-left font-semibold text-gray-900">Mensaje</th>
+                          <th className="px-4 py-3 text-left font-semibold text-gray-900">Fecha</th>
+                          <th className="px-4 py-3 text-center font-semibold text-gray-900">Acciones</th>
                         </tr>
-                      ))}
-                  </tbody>
-                </table>
+                      </thead>
+                      <tbody>
+                        {alertas
+                          .filter((a) => filtroAlertas === "todas" || a.severity === filtroAlertas)
+                          .map((alerta: any, idx: number) => (
+                            <tr
+                              key={alerta.id}
+                              className={`${idx % 2 === 0 ? "bg-white" : "bg-gray-50"} ${!alerta.is_read ? "border-l-4 border-l-blue-500" : ""}`}
+                            >
+                              <td className="px-4 py-3">
+                                {alerta.severity === "red" ? <span className="text-2xl">🔴</span> : <span className="text-2xl">🟡</span>}
+                              </td>
+                              <td className="px-4 py-3 font-medium text-gray-900">
+                                {alerta.type === "merma_anormal" ? "Merma Anormal"
+                                  : alerta.type === "stock_bajo" ? "Stock Bajo"
+                                  : alerta.type === "umbral_costo" ? "Costo Alto"
+                                  : "Sin Stock"}
+                              </td>
+                              <td className="px-4 py-3 text-gray-700">{alerta.message}</td>
+                              <td className="px-4 py-3 text-gray-600 text-xs">
+                                {new Date(alerta.created_at).toLocaleDateString("es-CO")}<br />
+                                {new Date(alerta.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                              </td>
+                              <td className="px-4 py-3 text-center space-x-2">
+                                {!alerta.is_read && (
+                                  <button className="text-blue-600 hover:text-blue-800 font-medium text-xs" onClick={() => marcarAlertaLeida(alerta.id)} title="Marcar como leída">✓</button>
+                                )}
+                                <button className="text-red-600 hover:text-red-800 font-medium text-xs" onClick={() => eliminarAlerta(alerta.id)} title="Eliminar">✕</button>
+                              </td>
+                            </tr>
+                          ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ── SUB-TAB: CONFIGURAR UMBRALES ── */}
+            {alertasTab === "configurar" && (
+              <div className="space-y-5">
+                <div className="flex justify-between items-center">
+                  <div>
+                    <h3 className="text-xl font-bold text-gray-900">Umbrales de Alerta</h3>
+                    <p className="text-sm text-gray-500 mt-1">El sistema generará alertas automáticamente cuando se superen estos límites</p>
+                  </div>
+                  <button
+                    className="btn btn-primary text-sm"
+                    onClick={() => setShowAddThreshold(!showAddThreshold)}
+                  >
+                    {showAddThreshold ? "Cancelar" : "+ Nuevo Umbral"}
+                  </button>
+                </div>
+
+                {/* Nota SQL */}
+                <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-800">
+                  <strong>⚠️ Prerequisito:</strong> Ejecuta la migración <code>003_create_alert_thresholds.sql</code> en Supabase SQL Editor antes de usar esta función.
+                </div>
+
+                {err && (
+                  <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-800">{err}</div>
+                )}
+
+                {/* Formulario nuevo umbral */}
+                {showAddThreshold && (
+                  <div className="bg-blue-50 border border-blue-200 rounded-xl p-5 space-y-4">
+                    <div className="font-semibold text-blue-900">Configurar nuevo umbral</div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-xs font-semibold text-gray-700 mb-1 block">Materia Prima *</label>
+                        <select
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          value={thresholdMaterial}
+                          onChange={(e) => { setThresholdMaterial(e.target.value); setThresholdState(""); }}
+                        >
+                          <option value="">— Seleccionar —</option>
+                          {materialesPrimas.map((m) => (
+                            <option key={m.id} value={m.id}>{m.name}</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="text-xs font-semibold text-gray-700 mb-1 block">Estado (opcional)</label>
+                        <select
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          value={thresholdState}
+                          onChange={(e) => setThresholdState(e.target.value)}
+                          disabled={!thresholdMaterial}
+                        >
+                          <option value="">— Todos los estados —</option>
+                          {(statesByMaterial[thresholdMaterial] ?? []).map((s: any) => (
+                            <option key={s.id} value={s.id}>{s.name}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <div>
+                        <label className="text-xs font-semibold text-gray-700 mb-1 block">
+                          Stock mínimo ({thresholdMaterial ? (materialesPrimas.find(m => m.id === thresholdMaterial)?.unit ?? "u") : "u"})
+                        </label>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          placeholder="ej: 5"
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          value={thresholdMinStock}
+                          onChange={(e) => setThresholdMinStock(e.target.value)}
+                        />
+                        <p className="text-xs text-gray-500 mt-1">Alerta si stock baja de este valor</p>
+                      </div>
+                      <div>
+                        <label className="text-xs font-semibold text-gray-700 mb-1 block">Costo máximo por unidad ($)</label>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          placeholder="ej: 5000"
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          value={thresholdMaxCost}
+                          onChange={(e) => setThresholdMaxCost(e.target.value)}
+                        />
+                        <p className="text-xs text-gray-500 mt-1">Alerta si el costo supera este valor</p>
+                      </div>
+                      <div>
+                        <label className="text-xs font-semibold text-gray-700 mb-1 block">Merma máxima (%)</label>
+                        <input
+                          type="number"
+                          min="0"
+                          max="100"
+                          step="0.1"
+                          placeholder="ej: 20"
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          value={thresholdMaxWaste}
+                          onChange={(e) => setThresholdMaxWaste(e.target.value)}
+                        />
+                        <p className="text-xs text-gray-500 mt-1">Alerta si la merma supera este %</p>
+                      </div>
+                    </div>
+
+                    <button
+                      className="btn btn-primary w-full"
+                      onClick={guardarThreshold}
+                      disabled={savingThreshold}
+                    >
+                      {savingThreshold ? "Guardando..." : "💾 Guardar Umbral"}
+                    </button>
+                  </div>
+                )}
+
+                {/* Lista de umbrales */}
+                {loadingThresholds ? (
+                  <p className="text-gray-500 text-sm">Cargando umbrales...</p>
+                ) : thresholds.length === 0 ? (
+                  <div className="text-center py-10 border-2 border-dashed border-gray-200 rounded-xl text-gray-400">
+                    <div className="text-3xl mb-2">⚙️</div>
+                    <p className="font-semibold">Sin umbrales configurados</p>
+                    <p className="text-sm mt-1">Agrega umbrales para recibir alertas automáticas</p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {thresholds.map((t: any) => (
+                      <div key={t.id} className="bg-white border border-gray-200 rounded-xl p-4 flex items-start justify-between gap-4">
+                        <div className="flex-1 space-y-1">
+                          <div className="font-semibold text-gray-900">
+                            {t.material_name}
+                            {t.state_name && <span className="ml-2 text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">{t.state_name}</span>}
+                          </div>
+                          <div className="flex flex-wrap gap-3 text-xs text-gray-600">
+                            {t.min_stock != null && (
+                              <span className="bg-red-50 border border-red-200 rounded px-2 py-1">
+                                📉 Stock mín: <strong>{t.min_stock} {t.material_unit}</strong>
+                              </span>
+                            )}
+                            {t.max_cost_per_unit != null && (
+                              <span className="bg-amber-50 border border-amber-200 rounded px-2 py-1">
+                                💰 Costo máx: <strong>${t.max_cost_per_unit.toLocaleString("es-CO")}/{t.material_unit}</strong>
+                              </span>
+                            )}
+                            {t.max_waste_pct != null && (
+                              <span className="bg-orange-50 border border-orange-200 rounded px-2 py-1">
+                                ⚠️ Merma máx: <strong>{t.max_waste_pct}%</strong>
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        <button
+                          className="text-red-500 hover:text-red-700 text-sm font-medium shrink-0"
+                          onClick={() => eliminarThreshold(t.id)}
+                          title="Eliminar umbral"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
           </div>
