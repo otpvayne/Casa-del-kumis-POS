@@ -87,6 +87,7 @@ type ProductFormula = {
 export default function AdminCostosPage() {
   const router = useRouter();
   const [selectedPlantId, setSelectedPlantId] = useState<string | null>(null);
+  const [selectedPlantName, setSelectedPlantName] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<Tab>("materias-primas");
   const [err, setErr] = useState<string | null>(null);
@@ -96,25 +97,31 @@ export default function AdminCostosPage() {
   // Cargar planta seleccionada del localStorage al montar
   useEffect(() => {
     const stored = localStorage.getItem("selectedPlantIdForCostos");
+    const storedName = localStorage.getItem("selectedPlantNameForCostos");
     if (stored) {
       setSelectedPlantId(stored);
+      setSelectedPlantName(storedName || "Planta");
     }
   }, []);
 
   // Guardar planta seleccionada en localStorage cuando cambia
   useEffect(() => {
-    if (selectedPlantId) {
+    if (selectedPlantId && selectedPlantName) {
       localStorage.setItem("selectedPlantIdForCostos", selectedPlantId);
+      localStorage.setItem("selectedPlantNameForCostos", selectedPlantName);
     }
-  }, [selectedPlantId]);
+  }, [selectedPlantId, selectedPlantName]);
 
-  const handleSelectPlant = (plantId: string) => {
+  const handleSelectPlant = (plantId: string, plantName: string) => {
     setSelectedPlantId(plantId);
+    setSelectedPlantName(plantName);
   };
 
   const handleChangePlant = () => {
     setSelectedPlantId(null);
+    setSelectedPlantName("");
     localStorage.removeItem("selectedPlantIdForCostos");
+    localStorage.removeItem("selectedPlantNameForCostos");
   };
 
   // Materias Primas
@@ -3200,13 +3207,17 @@ export default function AdminCostosPage() {
         title="Control de Costos"
         subtitle="Gestiona materias primas, producción, fórmulas y reportes."
         right={
-          <div className="flex gap-2">
+          <div className="flex gap-2 items-center">
+            <div className="px-3 py-1 rounded-lg bg-blue-100 border border-blue-300 text-blue-900 text-sm font-semibold flex items-center gap-2">
+              <span>🏭</span>
+              <span>{selectedPlantName}</span>
+            </div>
             <button
               className="btn btn-sm bg-amber-100 text-amber-900 hover:bg-amber-200 border border-amber-300"
               onClick={handleChangePlant}
               title="Cambiar a otra planta"
             >
-              🏭 Cambiar Planta
+              Cambiar Planta
             </button>
             <button className="btn" onClick={async () => await cargarMaterialesPrimas()}>
               Refrescar

@@ -10,7 +10,7 @@ interface Plant {
 }
 
 interface CostosPlantSelectorProps {
-  onSelectPlant: (plantId: string) => void;
+  onSelectPlant: (plantId: string, plantName: string) => void;
 }
 
 export function CostosPlantSelector({ onSelectPlant }: CostosPlantSelectorProps) {
@@ -93,7 +93,7 @@ export function CostosPlantSelector({ onSelectPlant }: CostosPlantSelectorProps)
                 {plants.map((plant) => (
                   <button
                     key={plant.id}
-                    onClick={() => onSelectPlant(plant.id)}
+                    onClick={() => onSelectPlant(plant.id, plant.name)}
                     className="w-full px-4 py-4 text-left bg-slate-50 hover:bg-blue-50 border-2 border-slate-200 hover:border-blue-400 rounded-lg transition-all duration-200 group"
                   >
                     <div className="flex items-center gap-3">
