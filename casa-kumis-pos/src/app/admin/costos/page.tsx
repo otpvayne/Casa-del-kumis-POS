@@ -4,12 +4,12 @@ import { useEffect, useMemo, useState, useRef } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { useRouter } from "next/navigation";
 import { requireRole } from "@/lib/requireRole";
-import { usePlant } from "@/contexts/PlantContext";
 import { calculateProductCost, calculateCostVariance, type MaterialBatch } from "@/utils/costCalculations";
 import PageShell from "@/components/PageShell";
 import LoadingCard from "@/components/LoadingCard";
 import { BatchLotSelector } from "@/components/BatchLotSelector";
 import { CostBreakdown } from "@/components/CostBreakdown";
+import { CostosPlantSelector } from "@/components/CostosPlantSelector";
 import {
   CostsTabs,
   CostsCard,
@@ -86,12 +86,36 @@ type ProductFormula = {
 
 export default function AdminCostosPage() {
   const router = useRouter();
-  const { selectedPlantId } = usePlant();
+  const [selectedPlantId, setSelectedPlantId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<Tab>("materias-primas");
   const [err, setErr] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const detallesRef = useRef<HTMLDivElement>(null);
+
+  // Cargar planta seleccionada del localStorage al montar
+  useEffect(() => {
+    const stored = localStorage.getItem("selectedPlantIdForCostos");
+    if (stored) {
+      setSelectedPlantId(stored);
+    }
+  }, []);
+
+  // Guardar planta seleccionada en localStorage cuando cambia
+  useEffect(() => {
+    if (selectedPlantId) {
+      localStorage.setItem("selectedPlantIdForCostos", selectedPlantId);
+    }
+  }, [selectedPlantId]);
+
+  const handleSelectPlant = (plantId: string) => {
+    setSelectedPlantId(plantId);
+  };
+
+  const handleChangePlant = () => {
+    setSelectedPlantId(null);
+    localStorage.removeItem("selectedPlantIdForCostos");
+  };
 
   // Materias Primas
   const [materialesPrimas, setMaterialesPrimas] = useState<RawMaterial[]>([]);
@@ -3155,6 +3179,11 @@ export default function AdminCostosPage() {
 
   if (loading) return <LoadingCard title="Cargando módulo de costos..." />;
 
+  // Si no hay planta seleccionada, mostrar selector
+  if (!selectedPlantId) {
+    return <CostosPlantSelector onSelectPlant={handleSelectPlant} />;
+  }
+
   return (
     <div className="container py-8">
       <PageShell
@@ -3162,6 +3191,13 @@ export default function AdminCostosPage() {
         subtitle="Gestiona materias primas, producción, fórmulas y reportes."
         right={
           <div className="flex gap-2">
+            <button
+              className="btn btn-sm bg-amber-100 text-amber-900 hover:bg-amber-200 border border-amber-300"
+              onClick={handleChangePlant}
+              title="Cambiar a otra planta"
+            >
+              🏭 Cambiar Planta
+            </button>
             <button className="btn" onClick={async () => await cargarMaterialesPrimas()}>
               Refrescar
             </button>
