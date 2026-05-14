@@ -85,6 +85,7 @@ export async function POST(request: NextRequest) {
       .select();
 
     if (error) {
+      console.error("Supabase error details:", error);
       if (error.code === "23505") {
         return NextResponse.json(
           { error: "Plant with this name already exists" },
@@ -95,10 +96,13 @@ export async function POST(request: NextRequest) {
     }
 
     return NextResponse.json(data[0], { status: 201 });
-  } catch (error) {
+  } catch (error: any) {
     console.error("Error creating plant:", error);
     return NextResponse.json(
-      { error: "Failed to create plant" },
+      {
+        error: "Failed to create plant",
+        details: error?.message || error?.toString()
+      },
       { status: 500 }
     );
   }
