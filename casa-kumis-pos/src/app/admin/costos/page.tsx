@@ -359,15 +359,17 @@ export default function AdminCostosPage() {
       const role = await requireRole("ADMIN");
       if (!role.ok) return router.replace("/admin");
 
-      await cargarMaterialesPrimas();
-      await obtenerAlertas();
+      if (selectedPlantId) {
+        await cargarMaterialesPrimas();
+        await obtenerAlertas();
+      }
       setLoading(false);
     };
     run().catch((e: any) => {
       setErr(e?.message ?? "Error cargando datos.");
       setLoading(false);
     });
-  }, [router]);
+  }, [router, selectedPlantId]);
 
   // Scroll automático a detalles cuando se selecciona una fórmula
   useEffect(() => {
