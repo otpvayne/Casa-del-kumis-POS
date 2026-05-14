@@ -413,8 +413,11 @@ export default function AdminCostosPage() {
       }
       setStatesByMaterial(statesMap);
 
-      // Cargar inventario
-      const { data: inventory } = await supabase.from("raw_material_inventory").select("*");
+      // Cargar inventario filtrado por planta
+      const { data: inventory } = await supabase
+        .from("raw_material_inventory")
+        .select("*")
+        .eq("plant_id", selectedPlantId);
       const invMap: Record<string, RawMaterialInventory[]> = {};
       for (const mat of materials ?? []) {
         invMap[mat.id] = (inventory ?? []).filter((i) => i.raw_material_id === mat.id);
@@ -1061,6 +1064,7 @@ export default function AdminCostosPage() {
           .select("id, quantity")
           .eq("raw_material_id", rawMaterialId)
           .eq("state_id", stateId)
+          .eq("plant_id", selectedPlantId)
           .limit(1);
 
         if (invError) {
@@ -1585,6 +1589,7 @@ export default function AdminCostosPage() {
             quantity_out: 0,
             batch_date: new Date().toISOString().split("T")[0],
             observations: wasteReason || null,
+            plant_id: selectedPlantId,
             created_by: userId,
           },
         ])
@@ -1597,7 +1602,8 @@ export default function AdminCostosPage() {
         .from("raw_material_inventory")
         .select("*")
         .eq("raw_material_id", transformMaterial)
-        .eq("state_id", transformFromState);
+        .eq("state_id", transformFromState)
+        .eq("plant_id", selectedPlantId);
 
       if (inventoryData && inventoryData[0]) {
         const newQty = (inventoryData[0].quantity || 0) - qty;
@@ -1617,6 +1623,7 @@ export default function AdminCostosPage() {
             quantity_after: newQty,
             reason: "Merma Adicional",
             related_id: batchData?.[0]?.id,
+            plant_id: selectedPlantId,
           },
         ]);
 
@@ -1902,7 +1909,7 @@ export default function AdminCostosPage() {
         await cargarFormulas();
       }
 
-      // Cargar merma
+      // Cargar merma filtrada por planta
       const { data: mermaData } = await supabase
         .from("raw_material_inventory_audit_logs")
         .select(`
@@ -1915,6 +1922,7 @@ export default function AdminCostosPage() {
           state_id
         `)
         .eq("reason", "Merma Adicional")
+        .eq("plant_id", selectedPlantId)
         .order("created_at", { ascending: false });
 
       if (mermaData) {
@@ -1960,10 +1968,11 @@ export default function AdminCostosPage() {
         setDataProduccion(Object.values(prodMap));
       }
 
-      // Cargar variancia
+      // Cargar variancia filtrada por planta
       const { data: varianciaData, error: varianciaError } = await supabase
         .from("production_variance_log")
         .select("*")
+        .eq("plant_id", selectedPlantId)
         .order("created_at", { ascending: false })
         .limit(100);
 
@@ -2283,6 +2292,7 @@ export default function AdminCostosPage() {
       const { data: alertasData, error } = await supabase
         .from("alerts")
         .select("*")
+        .eq("plant_id", selectedPlantId)
         .order("created_at", { ascending: false });
 
       if (error) {
