@@ -1355,7 +1355,8 @@ export default function AdminCostosPage() {
         .from("raw_material_inventory")
         .select("*")
         .eq("raw_material_id", selectedMaterial)
-        .eq("state_id", selectedState);
+        .eq("state_id", selectedState)
+        .eq("plant_id", selectedPlantId);
 
       if (invData && invData[0]) {
         // Convertir quantity a número (Supabase retorna como string)
@@ -1372,6 +1373,7 @@ export default function AdminCostosPage() {
             raw_material_id: selectedMaterial,
             state_id: selectedState,
             quantity: qty,
+            plant_id: selectedPlantId,
           },
         ]);
       }
@@ -1385,6 +1387,7 @@ export default function AdminCostosPage() {
           quantity_after: (invData?.[0]?.quantity || 0) + qty,
           reason: "Entrada inicial",
           related_id: batchData?.[0]?.id,
+          plant_id: selectedPlantId,
         },
       ]);
 
