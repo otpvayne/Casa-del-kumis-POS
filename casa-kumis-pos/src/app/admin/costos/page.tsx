@@ -1358,8 +1358,8 @@ export default function AdminCostosPage() {
         .eq("state_id", selectedState)
         .eq("plant_id", selectedPlantId);
 
-      if (invData && invData[0]) {
-        // Convertir quantity a número (Supabase retorna como string)
+      if (invData && invData.length > 0) {
+        // Actualizar inventario existente
         const currentQty = parseFloat(invData[0].quantity) || 0;
         const newQty = currentQty + qty;
 
@@ -1368,18 +1368,40 @@ export default function AdminCostosPage() {
           .update({ quantity: newQty, last_updated: new Date().toISOString() })
           .eq("id", invData[0].id);
       } else {
-        // Usar upsert para evitar conflictos si el registro ya existe
-        await supabase.from("raw_material_inventory").upsert(
-          [
-            {
-              raw_material_id: selectedMaterial,
-              state_id: selectedState,
-              quantity: qty,
-              plant_id: selectedPlantId,
-            },
-          ],
-          { onConflict: "raw_material_id,state_id,plant_id" }
-        );
+        // Insertar nuevo registro de inventario
+        const { error: insertError } = await supabase.from("raw_material_inventory").insert([
+          {
+            raw_material_id: selectedMaterial,
+            state_id: selectedState,
+            quantity: qty,
+            plant_id: selectedPlantId,
+          },
+        ]);
+
+        if (insertError && insertError.code !== "23505") {
+          // Si el error no es por restricción UNIQUE, lanzar error
+          throw insertError;
+        }
+        // Si es un error de UNIQUE (23505), significa que el registro ya existe
+        // En este caso, actualizarlo
+        if (insertError?.code === "23505") {
+          const { data: existingInv } = await supabase
+            .from("raw_material_inventory")
+            .select("*")
+            .eq("raw_material_id", selectedMaterial)
+            .eq("state_id", selectedState)
+            .eq("plant_id", selectedPlantId)
+            .single();
+
+          if (existingInv) {
+            const currentQty = parseFloat(existingInv.quantity) || 0;
+            const newQty = currentQty + qty;
+            await supabase
+              .from("raw_material_inventory")
+              .update({ quantity: newQty, last_updated: new Date().toISOString() })
+              .eq("id", existingInv.id);
+          }
+        }
       }
 
       // Registrar audit log
