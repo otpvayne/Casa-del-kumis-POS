@@ -17,6 +17,10 @@ export function CostosPlantSelector({ onSelectPlant }: CostosPlantSelectorProps)
   const [plants, setPlants] = useState<Plant[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [showCreateForm, setShowCreateForm] = useState(false);
+  const [newPlantName, setNewPlantName] = useState("");
+  const [isCreating, setIsCreating] = useState(false);
+  const [isDeleting, setIsDeleting] = useState<string | null>(null);
 
   useEffect(() => {
     loadPlants();
@@ -35,6 +39,55 @@ export function CostosPlantSelector({ onSelectPlant }: CostosPlantSelectorProps)
       setPlants([]);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleCreatePlant = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newPlantName.trim()) return;
+
+    setIsCreating(true);
+    try {
+      const response = await fetch("/api/plants", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: newPlantName.trim() }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Error creando planta");
+      }
+
+      const newPlant = await response.json();
+      setPlants([...plants, newPlant]);
+      setNewPlantName("");
+      setShowCreateForm(false);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Error creando planta");
+    } finally {
+      setIsCreating(false);
+    }
+  };
+
+  const handleDeletePlant = async (plantId: string) => {
+    if (!confirm("¿Estás seguro de que deseas eliminar esta planta?")) return;
+
+    setIsDeleting(plantId);
+    try {
+      const response = await fetch(`/api/plants/${plantId}`, {
+        method: "DELETE",
+      });
+
+      if (!response.ok) throw new Error("Error eliminando planta");
+
+      setPlants(plants.filter((p) => p.id !== plantId));
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Error eliminando planta");
+    } finally {
+      setIsDeleting(null);
     }
   };
 
@@ -81,33 +134,80 @@ export function CostosPlantSelector({ onSelectPlant }: CostosPlantSelectorProps)
               <div className="text-center py-8">
                 <Factory size={48} className="text-slate-300 mx-auto mb-4" />
                 <p className="text-slate-500 mb-4">No hay plantas creadas aún</p>
-                <button
-                  onClick={() => window.location.href = "/admin"}
-                  className="text-blue-600 hover:text-blue-700 font-medium text-sm"
-                >
-                  Ir a configuración
-                </button>
               </div>
             ) : (
               <div className="space-y-3">
                 {plants.map((plant) => (
-                  <button
-                    key={plant.id}
-                    onClick={() => onSelectPlant(plant.id, plant.name)}
-                    className="w-full px-4 py-4 text-left bg-slate-50 hover:bg-blue-50 border-2 border-slate-200 hover:border-blue-400 rounded-lg transition-all duration-200 group"
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center group-hover:bg-blue-200 transition-colors">
-                        <Factory size={24} className="text-blue-600" />
+                  <div key={plant.id} className="flex items-center justify-between gap-2">
+                    <button
+                      onClick={() => onSelectPlant(plant.id, plant.name)}
+                      className="flex-1 px-4 py-4 text-left bg-slate-50 hover:bg-blue-50 border-2 border-slate-200 hover:border-blue-400 rounded-lg transition-all duration-200 group"
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center group-hover:bg-blue-200 transition-colors">
+                          <Factory size={20} className="text-blue-600" />
+                        </div>
+                        <div>
+                          <p className="font-semibold text-slate-900">{plant.name}</p>
+                          <p className="text-xs text-slate-500">Haz clic para seleccionar</p>
+                        </div>
                       </div>
-                      <div>
-                        <p className="font-semibold text-slate-900">{plant.name}</p>
-                        <p className="text-sm text-slate-500">Haz clic para seleccionar</p>
-                      </div>
-                    </div>
-                  </button>
+                    </button>
+                    <button
+                      onClick={() => handleDeletePlant(plant.id)}
+                      disabled={isDeleting === plant.id}
+                      className="px-3 py-3 text-red-600 hover:bg-red-50 rounded-lg transition text-sm font-semibold disabled:opacity-50"
+                      title="Eliminar planta"
+                    >
+                      {isDeleting === plant.id ? "..." : "✕"}
+                    </button>
+                  </div>
                 ))}
               </div>
+            )}
+
+            {/* Separador */}
+            {plants.length > 0 && <div className="border-t border-slate-200 my-3" />}
+
+            {/* Formulario de crear planta */}
+            {showCreateForm ? (
+              <form onSubmit={handleCreatePlant} className="space-y-2">
+                <input
+                  type="text"
+                  placeholder="Nombre de la planta"
+                  value={newPlantName}
+                  onChange={(e) => setNewPlantName(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm"
+                  autoFocus
+                  disabled={isCreating}
+                />
+                <div className="flex gap-2">
+                  <button
+                    type="submit"
+                    disabled={isCreating || !newPlantName.trim()}
+                    className="flex-1 px-3 py-2 bg-green-500 text-white rounded-lg text-sm font-semibold hover:bg-green-600 disabled:opacity-50"
+                  >
+                    {isCreating ? "Creando..." : "Crear"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowCreateForm(false);
+                      setNewPlantName("");
+                    }}
+                    className="flex-1 px-3 py-2 bg-slate-300 text-slate-900 rounded-lg text-sm font-semibold hover:bg-slate-400"
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <button
+                onClick={() => setShowCreateForm(true)}
+                className="w-full px-3 py-2 bg-green-500 text-white rounded-lg text-sm font-semibold hover:bg-green-600 transition"
+              >
+                + Nueva Planta
+              </button>
             )}
           </div>
 

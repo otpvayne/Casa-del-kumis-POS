@@ -6,9 +6,10 @@ type PageShellProps = {
   subtitle?: React.ReactNode;
   right?: React.ReactNode;
   children: React.ReactNode;
+  hidePlantSelector?: boolean;
 };
 
-export default function PageShell({ title, subtitle, right, children }: PageShellProps) {
+export default function PageShell({ title, subtitle, right, children, hidePlantSelector = false }: PageShellProps) {
   return (
     <div className="page">
       <div className="mb-5 flex items-start justify-between gap-4">
@@ -22,7 +23,7 @@ export default function PageShell({ title, subtitle, right, children }: PageShel
 
         <div className="flex items-center gap-2">
           {right ? right : null}
-          <PlantSelector />
+          {!hidePlantSelector && <PlantSelector />}
           <UserChip />
         </div>
       </div>

@@ -3208,6 +3208,7 @@ export default function AdminCostosPage() {
       <PageShell
         title="Control de Costos"
         subtitle="Gestiona materias primas, producción, fórmulas y reportes."
+        hidePlantSelector={true}
         right={
           <div className="flex gap-2 items-center">
             <div className="px-3 py-1 rounded-lg bg-blue-100 border border-blue-300 text-blue-900 text-sm font-semibold flex items-center gap-2">
