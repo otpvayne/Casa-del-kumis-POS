@@ -714,6 +714,8 @@ export default function AdminCostosPage() {
 
   // Efecto para recargar datos cuando cambias de tab
   useEffect(() => {
+    if (!selectedPlantId) return; // No hacer nada si no hay planta seleccionada
+
     if (activeTab === "materias-primas") {
       cargarMaterialesPrimas();
     }
