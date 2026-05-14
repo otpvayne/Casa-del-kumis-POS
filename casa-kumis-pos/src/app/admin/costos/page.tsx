@@ -4967,7 +4967,15 @@ export default function AdminCostosPage() {
                                       <select
                                         onChange={(e) => {
                                           if (e.target.value) {
-                                            const newSelection = { batchId: e.target.value, quantity: 0 };
+                                            // Auto-calcular la cantidad requerida restante
+                                            const required = getRequiredQuantity(ing) * (parseFloat(cantidadProducida) || 0);
+                                            const alreadySelected = (ingredienteLotes[ing.id] || []).reduce((sum, s) => sum + s.quantity, 0);
+                                            const remaining = Math.max(0, required - alreadySelected);
+                                            const batch = batches.find((b) => b.id === e.target.value);
+                                            const maxByBatch = batch?.quantity_out || 0;
+                                            const autoQty = Math.round(Math.min(remaining, maxByBatch) * 10000) / 10000;
+
+                                            const newSelection = { batchId: e.target.value, quantity: autoQty };
                                             setIngredienteLotes({
                                               ...ingredienteLotes,
                                               [ing.id]: [...(ingredienteLotes[ing.id] || []), newSelection],
