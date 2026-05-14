@@ -1368,14 +1368,18 @@ export default function AdminCostosPage() {
           .update({ quantity: newQty, last_updated: new Date().toISOString() })
           .eq("id", invData[0].id);
       } else {
-        await supabase.from("raw_material_inventory").insert([
-          {
-            raw_material_id: selectedMaterial,
-            state_id: selectedState,
-            quantity: qty,
-            plant_id: selectedPlantId,
-          },
-        ]);
+        // Usar upsert para evitar conflictos si el registro ya existe
+        await supabase.from("raw_material_inventory").upsert(
+          [
+            {
+              raw_material_id: selectedMaterial,
+              state_id: selectedState,
+              quantity: qty,
+              plant_id: selectedPlantId,
+            },
+          ],
+          { onConflict: "raw_material_id,state_id,plant_id" }
+        );
       }
 
       // Registrar audit log
