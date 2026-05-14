@@ -6167,11 +6167,6 @@ export default function AdminCostosPage() {
                   </button>
                 </div>
 
-                {/* Nota SQL */}
-                <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-800">
-                  <strong>⚠️ Prerequisito:</strong> Ejecuta la migración <code>003_create_alert_thresholds.sql</code> en Supabase SQL Editor antes de usar esta función.
-                </div>
-
                 {err && (
                   <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-800">{err}</div>
                 )}
