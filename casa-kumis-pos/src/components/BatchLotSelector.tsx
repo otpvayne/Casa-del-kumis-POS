@@ -136,42 +136,6 @@ export function BatchLotSelector({
             </div>
           </div>
 
-          {/* Cantidad a usar */}
-          <div className="space-y-1">
-            <label className="text-sm font-semibold text-gray-700">
-              Cantidad a usar ({selectedBatch.unit})
-            </label>
-            <div className="flex gap-2">
-              <input
-                type="number"
-                min="0"
-                step="0.01"
-                max={selectedBatch.quantity_out}
-                value={selectedQuantity || ""}
-                onChange={(e) => {
-                  const qty = parseFloat(e.target.value) || 0;
-                  if (qty <= selectedBatch.quantity_out) {
-                    onQuantityChange?.(qty);
-                  }
-                }}
-                placeholder="0"
-                className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-              <div className="text-xs text-gray-600 bg-gray-50 rounded px-2 py-2 whitespace-nowrap">
-                Máx: {selectedBatch.quantity_out}
-              </div>
-            </div>
-            {selectedQuantity && selectedQuantity > selectedBatch.quantity_out && (
-              <div className="text-xs text-red-600 bg-red-50 p-2 rounded border border-red-200">
-                ⚠️ La cantidad supera lo disponible
-              </div>
-            )}
-            {selectedQuantity && selectedQuantity > 0 && (
-              <div className="text-xs text-green-700 bg-green-50 p-2 rounded">
-                💰 Costo: ${(selectedQuantity * selectedBatch.cost_per_unit).toFixed(2)}
-              </div>
-            )}
-          </div>
         </div>
       )}
     </div>

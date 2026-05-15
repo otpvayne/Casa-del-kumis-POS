@@ -174,6 +174,9 @@ export default function AdminCostosPage() {
   const [transformQtyOut, setTransformQtyOut] = useState("");
   const [transformObservaciones, setTransformObservaciones] = useState("");
   const [savingTransform, setSavingTransform] = useState(false);
+  const [transformAvailableBatches, setTransformAvailableBatches] = useState<Array<any>>([]);
+  const [transformSelectedBatch, setTransformSelectedBatch] = useState("");
+  const [loadingTransformBatches, setLoadingTransformBatches] = useState(false);
 
   // MERMA ADICIONAL
   const [batchSelect, setBatchSelect] = useState("");
@@ -734,6 +737,22 @@ export default function AdminCostosPage() {
     }
   }, [activeTab, selectedPlantId]);
 
+  // Limpiar formularios cuando cambia de planta
+  useEffect(() => {
+    setTransformAvailableBatches([]);
+    setTransformSelectedBatch("");
+    setTransformMaterial("");
+    setTransformFromState("");
+    setTransformToState("");
+    setTransformQtyIn("");
+    setTransformQtyOut("");
+    setTransformObservaciones("");
+    setBatchSelect("");
+    setWasteQty("");
+    setWasteReason("");
+    cargarLotes(); // Cargar lotes de la nueva planta
+  }, [selectedPlantId]);
+
   // FUNCIÓN HELPER: Obtener todos los ingredientes recursivamente (incluyendo anidados)
   const obtenerTodosLosIngredientes = (
     ingredientes: any[],
@@ -908,19 +927,28 @@ export default function AdminCostosPage() {
 
       // Convertir las selecciones de múltiples lotes a un lote ponderado
       const batchSelections: Record<string, string> = {};
+      const batchSelectionsByFlatId: Record<string, string> = {};
       const virtualBatches: Record<string, MaterialBatch> = {};
 
-      // Mapeo de flatId -> batchId para mantener lotes separados por bloque
-      const batchSelectionsByFlatId: Record<string, string> = {};
+      // Mapeo de originalId -> todas sus selecciones por flatId (para resolver ambigüedades)
+      const batchSelectionsByOriginalId: Record<string, Record<string, string>> = {};
 
       Object.entries(ingredienteLotes).forEach(([flatId, selections]) => {
         const originalId = getOriginalIngredientId(flatId);
 
+        if (!batchSelectionsByOriginalId[originalId]) {
+          batchSelectionsByOriginalId[originalId] = {};
+        }
+
         if (selections.length === 1) {
-          // Un solo lote: usar directamente, almacenado por flatId
-          batchSelectionsByFlatId[flatId] = selections[0].batchId;
-          // También guardar por originalId para compatibilidad con calculateProductCost
-          batchSelections[originalId] = selections[0].batchId;
+          // Un solo lote: usar directamente
+          const batchId = selections[0].batchId;
+          batchSelectionsByFlatId[flatId] = batchId;
+          batchSelectionsByOriginalId[originalId][flatId] = batchId;
+          // Por compatibilidad, guardar el primero encontrado en batchSelections
+          if (!batchSelections[originalId]) {
+            batchSelections[originalId] = batchId;
+          }
         } else {
           // Múltiples lotes: crear lote virtual con costo promedio ponderado
           const totalQty = selections.reduce((sum, sel) => sum + sel.quantity, 0);
@@ -949,15 +977,45 @@ export default function AdminCostosPage() {
             lot_code: `Mezcla (${selections.length} lotes)`,
           };
 
-          // Guardar por flatId y por originalId
+          // Guardar por flatId y en el mapeo de originalId
           batchSelectionsByFlatId[flatId] = virtualBatchId;
-          batchSelections[originalId] = virtualBatchId;
+          batchSelectionsByOriginalId[originalId][flatId] = virtualBatchId;
+          // Por compatibilidad, guardar en batchSelections (usa el primero encontrado)
+          if (!batchSelections[originalId]) {
+            batchSelections[originalId] = virtualBatchId;
+          }
         }
       });
 
       // Agregar lotes virtuales a la lista de batches
       const batchesConVirtual = [...batchesFormato, ...Object.values(virtualBatches)];
 
+      // Función helper: resolver el lote correcto basado en el path de anidación
+      const resolveBatchForIngredient = (ingredientId: string, contextPath: string[]): string => {
+        // Construir el flatId esperado usando el context path
+        const flatId = contextPath.length > 0
+          ? `${contextPath.join(".")}.${ingredientId}`
+          : ingredientId;
+
+        // Buscar en batchSelectionsByFlatId primero (más específico)
+        if (batchSelectionsByFlatId[flatId]) {
+          return batchSelectionsByFlatId[flatId];
+        }
+
+        // Fallback: si no hay flatId exacto, buscar entre las selecciones del originalId
+        if (batchSelectionsByOriginalId[ingredientId]) {
+          // Devolver la única selección si hay una
+          const selections = Object.values(batchSelectionsByOriginalId[ingredientId]);
+          if (selections.length === 1) {
+            return selections[0];
+          }
+          // Si hay múltiples, devolver la primera (es mejor que nada)
+          return selections[0];
+        }
+
+        // Fallback final: usar batchSelections
+        return batchSelections[ingredientId] || "";
+      };
 
       // Calcular costo del producto
       const cantProducida = parseFloat(cantidadProducida);
@@ -970,10 +1028,88 @@ export default function AdminCostosPage() {
         state_id: ing.ingredient_state_id,
       })) as any;
 
-      const { totalCost, breakdown } = calculateProductCost(
+      // Función mejorada: calcular costo con soporte para contexto de anidación
+      const calculateProductCostWithContext = (
+        productId: string,
+        ingredients: any[],
+        batches: MaterialBatch[],
+        formulasMap: any,
+        contextPath: string[] = []
+      ): { totalCost: number; breakdown: any[] } => {
+        let totalCost = 0;
+        const breakdown: any[] = [];
+
+        for (const ingredient of ingredients) {
+          if (ingredient.ingredient_type === "RAW_MATERIAL") {
+            const batchId = resolveBatchForIngredient(ingredient.ingredient_id, contextPath);
+            if (!batchId) {
+              console.warn(`No batch selected for: ${ingredient.ingredient_id}`);
+              continue;
+            }
+
+            const batch = batches.find((b) => b.id === batchId);
+            if (!batch) {
+              console.warn(`Batch not found: ${batchId}`);
+              continue;
+            }
+
+            const costPerUnit = batch.cost_per_unit || (batch.cost / batch.quantity_out) || 0;
+            const ingredientCost = ingredient.quantity * costPerUnit;
+
+            totalCost += ingredientCost;
+            breakdown.push({
+              ingredient_id: ingredient.ingredient_id,
+              ingredient_name: ingredient.ingredient_name,
+              ingredient_type: "RAW_MATERIAL",
+              quantity_used: ingredient.quantity,
+              batch_id: batch.id,
+              batch_lot_code: batch.lot_code,
+              cost_per_unit: costPerUnit,
+              cost_total: ingredientCost,
+              unit: ingredient.unit,
+            });
+          } else if (ingredient.ingredient_type === "PRODUCT") {
+            const subIngredients = formulasMap.get(ingredient.ingredient_id);
+            if (!subIngredients) {
+              console.warn(`Formula not found for: ${ingredient.ingredient_id}`);
+              continue;
+            }
+
+            const newContextPath = [...contextPath, ingredient.ingredient_id];
+            const { totalCost: subTotalCost, breakdown: subBreakdown } =
+              calculateProductCostWithContext(
+                ingredient.ingredient_id,
+                subIngredients,
+                batches,
+                formulasMap,
+                newContextPath
+              );
+
+            const nestedCost = subTotalCost * ingredient.quantity;
+            totalCost += nestedCost;
+
+            breakdown.push({
+              ingredient_id: ingredient.ingredient_id,
+              ingredient_name: ingredient.ingredient_name,
+              ingredient_type: "PRODUCT",
+              quantity_used: ingredient.quantity,
+              batch_id: "N/A",
+              batch_lot_code: "N/A",
+              cost_per_unit: subTotalCost,
+              cost_total: nestedCost,
+              unit: ingredient.unit,
+            });
+
+            breakdown.push(...subBreakdown);
+          }
+        }
+
+        return { totalCost, breakdown };
+      };
+
+      const { totalCost, breakdown } = calculateProductCostWithContext(
         productoVariancia,
         ingredientsFormatted,
-        batchSelections,
         batchesConVirtual,
         formulasMap
       );
@@ -1150,8 +1286,15 @@ export default function AdminCostosPage() {
 
   // CARGAR LOTES DISPONIBLES
   const cargarLotes = async () => {
+    if (!selectedPlantId) {
+      console.warn("cargarLotes: selectedPlantId no disponible");
+      setBatches([]);
+      return;
+    }
+
     try {
       setLoadingBatches(true);
+      console.log("cargarLotes: Cargando lotes para planta:", selectedPlantId);
       const { data, error } = await supabase
         .from("raw_material_batches")
         .select("id, lot_code, raw_material_id, to_state_id, quantity_out, cost_per_unit, batch_date, raw_materials(name, unit), raw_material_states!to_state_id(name)")
@@ -1160,6 +1303,8 @@ export default function AdminCostosPage() {
         .order("batch_date", { ascending: false });
 
       if (error) throw error;
+
+      console.log(`cargarLotes: ${data?.length || 0} lotes encontrados para planta ${selectedPlantId}`);
 
       const formattedBatches = (data ?? []).map((batch: any) => ({
         id: batch.id,
@@ -1246,31 +1391,40 @@ export default function AdminCostosPage() {
       if (updateError) throw updateError;
 
       // Actualizar inventario (raw_material_inventory)
-      const { data: invData } = await supabase
+      const { data: invData, error: invError } = await supabase
         .from("raw_material_inventory")
         .select("*")
-        .eq("raw_material_id", selectedBatch.raw_material_id);
+        .eq("raw_material_id", selectedBatch.raw_material_id)
+        .eq("plant_id", selectedPlantId);
+
+      if (invError) throw invError;
 
       if (invData && invData[0]) {
         const currentQty = parseFloat(invData[0].quantity) || 0;
         const updatedQty = Math.max(0, currentQty - wasteQuantity);
 
-        await supabase
+        const { error: updateInvError } = await supabase
           .from("raw_material_inventory")
           .update({ quantity: updatedQty, last_updated: new Date().toISOString() })
           .eq("id", invData[0].id);
+
+        if (updateInvError) throw updateInvError;
       }
 
       // Registrar audit log
-      await supabase.from("raw_material_inventory_audit_logs").insert([
+      const { error: auditError } = await supabase.from("raw_material_inventory_audit_logs").insert([
         {
           raw_material_id: selectedBatch.raw_material_id,
+          state_id: selectedBatch.to_state_id,
           quantity_before: invData?.[0]?.quantity || 0,
           quantity_after: Math.max(0, (invData?.[0]?.quantity || 0) - wasteQuantity),
           reason: `Merma: ${wasteReason || "Sin especificar"}`,
           related_id: batchSelect,
+          plant_id: selectedPlantId,
         },
       ]);
+
+      if (auditError) throw auditError;
 
       // Limpiar formulario
       setBatchSelect("");
@@ -1351,22 +1505,26 @@ export default function AdminCostosPage() {
       if (batchError) throw new Error(batchError.message);
 
       // Actualizar inventario
-      const { data: invData } = await supabase
+      const { data: invData, error: selectError } = await supabase
         .from("raw_material_inventory")
         .select("*")
         .eq("raw_material_id", selectedMaterial)
         .eq("state_id", selectedState)
         .eq("plant_id", selectedPlantId);
 
+      if (selectError) throw selectError;
+
       if (invData && invData.length > 0) {
         // Actualizar inventario existente
         const currentQty = parseFloat(invData[0].quantity) || 0;
         const newQty = currentQty + qty;
 
-        await supabase
+        const { error: updateError } = await supabase
           .from("raw_material_inventory")
           .update({ quantity: newQty, last_updated: new Date().toISOString() })
           .eq("id", invData[0].id);
+
+        if (updateError) throw updateError;
       } else {
         // Insertar nuevo registro de inventario
         const { error: insertError } = await supabase.from("raw_material_inventory").insert([
@@ -1378,30 +1536,7 @@ export default function AdminCostosPage() {
           },
         ]);
 
-        if (insertError && insertError.code !== "23505") {
-          // Si el error no es por restricción UNIQUE, lanzar error
-          throw insertError;
-        }
-        // Si es un error de UNIQUE (23505), significa que el registro ya existe
-        // En este caso, actualizarlo
-        if (insertError?.code === "23505") {
-          const { data: existingInv } = await supabase
-            .from("raw_material_inventory")
-            .select("*")
-            .eq("raw_material_id", selectedMaterial)
-            .eq("state_id", selectedState)
-            .eq("plant_id", selectedPlantId)
-            .single();
-
-          if (existingInv) {
-            const currentQty = parseFloat(existingInv.quantity) || 0;
-            const newQty = currentQty + qty;
-            await supabase
-              .from("raw_material_inventory")
-              .update({ quantity: newQty, last_updated: new Date().toISOString() })
-              .eq("id", existingInv.id);
-          }
-        }
+        if (insertError) throw insertError;
       }
 
       // Registrar audit log
@@ -1438,10 +1573,45 @@ export default function AdminCostosPage() {
     }
   };
 
+  // Cargar lotes disponibles para transformación
+  const loadTransformBatches = async (materialId: string, fromStateId: string) => {
+    if (!materialId || !fromStateId || !selectedPlantId) {
+      setTransformAvailableBatches([]);
+      return;
+    }
+
+    setLoadingTransformBatches(true);
+    try {
+      const { data, error } = await supabase
+        .from("raw_material_batches")
+        .select("*")
+        .eq("raw_material_id", materialId)
+        .eq("to_state_id", fromStateId)
+        .eq("plant_id", selectedPlantId)
+        .gt("quantity_out", 0)
+        .order("batch_date", { ascending: false });
+
+      if (error) throw error;
+      console.log(`Lotes cargados para planta ${selectedPlantId}:`, data);
+      setTransformAvailableBatches(data || []);
+      setTransformSelectedBatch(""); // Resetear selección al cargar nuevos lotes
+    } catch (e) {
+      console.error("Error cargando lotes para transformación:", e);
+      setTransformAvailableBatches([]);
+    } finally {
+      setLoadingTransformBatches(false);
+    }
+  };
+
   // REGISTRAR TRANSFORMACIÓN
   const registrarTransformacion = async () => {
     if (!transformMaterial || !transformFromState || !transformToState || !transformQtyIn || !transformQtyOut) {
       setErr("Completa todos los campos de transformación.");
+      return;
+    }
+
+    if (!transformSelectedBatch) {
+      setErr("Selecciona un lote para transformar.");
       return;
     }
 
@@ -1458,19 +1628,14 @@ export default function AdminCostosPage() {
       const session = await supabase.auth.getSession();
       const userId = session.data.session?.user.id;
 
-      // Obtener el costo del lote origen para heredarlo al lote destino
-      const { data: sourceBatches } = await supabase
-        .from("raw_material_batches")
-        .select("cost_per_unit, quantity_out")
-        .eq("raw_material_id", transformMaterial)
-        .eq("to_state_id", transformFromState)
-        .eq("plant_id", selectedPlantId)
-        .gt("quantity_out", 0)
-        .order("batch_date", { ascending: false })
-        .limit(1);
+      // Obtener el costo del lote seleccionado para heredarlo al lote destino
+      const selectedBatchData = transformAvailableBatches.find((b) => b.id === transformSelectedBatch);
+      if (!selectedBatchData) {
+        throw new Error("El lote seleccionado no existe o no está disponible.");
+      }
 
       // Calcular costo heredado: misma plata, menos cantidad → mayor costo/unidad
-      const sourceCostPerUnit = sourceBatches?.[0]?.cost_per_unit ?? 0;
+      const sourceCostPerUnit = selectedBatchData.cost_per_unit ?? 0;
       const totalCostFromSource = sourceCostPerUnit * qtyIn;
       const inheritedCostPerUnit = qtyOut > 0 ? totalCostFromSource / qtyOut : 0;
 
@@ -1502,18 +1667,23 @@ export default function AdminCostosPage() {
       if (batchError) throw new Error(batchError.message);
 
       // Obtener cantidad actual del estado origen
-      const { data: originData } = await supabase
+      const { data: originData, error: originError } = await supabase
         .from("raw_material_inventory")
         .select("*")
         .eq("raw_material_id", transformMaterial)
-        .eq("state_id", transformFromState);
+        .eq("state_id", transformFromState)
+        .eq("plant_id", selectedPlantId);
+
+      if (originError) throw originError;
 
       if (originData && originData[0]) {
         const newQty = (originData[0].quantity || 0) - qtyIn;
-        await supabase
+        const { error: updateError } = await supabase
           .from("raw_material_inventory")
           .update({ quantity: newQty, last_updated: new Date().toISOString() })
           .eq("id", originData[0].id);
+
+        if (updateError) throw updateError;
 
         // Audit log origen
         await supabase.from("raw_material_inventory_audit_logs").insert([
@@ -1524,23 +1694,29 @@ export default function AdminCostosPage() {
             quantity_after: newQty,
             reason: "Transformación",
             related_id: batchData?.[0]?.id,
+            plant_id: selectedPlantId,
           },
         ]);
       }
 
       // Obtener cantidad actual del estado destino
-      const { data: destData } = await supabase
+      const { data: destData, error: destError } = await supabase
         .from("raw_material_inventory")
         .select("*")
         .eq("raw_material_id", transformMaterial)
-        .eq("state_id", transformToState);
+        .eq("state_id", transformToState)
+        .eq("plant_id", selectedPlantId);
+
+      if (destError) throw destError;
 
       if (destData && destData[0]) {
         const newQty = (destData[0].quantity || 0) + qtyOut;
-        await supabase
+        const { error: updateError } = await supabase
           .from("raw_material_inventory")
           .update({ quantity: newQty, last_updated: new Date().toISOString() })
           .eq("id", destData[0].id);
+
+        if (updateError) throw updateError;
 
         // Audit log destino
         await supabase.from("raw_material_inventory_audit_logs").insert([
@@ -1551,16 +1727,20 @@ export default function AdminCostosPage() {
             quantity_after: newQty,
             reason: "Transformación",
             related_id: batchData?.[0]?.id,
+            plant_id: selectedPlantId,
           },
         ]);
       } else {
-        await supabase.from("raw_material_inventory").insert([
+        const { error: insertError } = await supabase.from("raw_material_inventory").insert([
           {
             raw_material_id: transformMaterial,
             state_id: transformToState,
             quantity: qtyOut,
+            plant_id: selectedPlantId,
           },
         ]);
+
+        if (insertError) throw insertError;
 
         // Audit log destino (nuevo)
         await supabase.from("raw_material_inventory_audit_logs").insert([
@@ -1571,6 +1751,7 @@ export default function AdminCostosPage() {
             quantity_after: qtyOut,
             reason: "Transformación",
             related_id: batchData?.[0]?.id,
+            plant_id: selectedPlantId,
           },
         ]);
       }
@@ -1581,6 +1762,8 @@ export default function AdminCostosPage() {
       setTransformQtyIn("");
       setTransformQtyOut("");
       setTransformObservaciones("");
+      setTransformSelectedBatch("");
+      setTransformAvailableBatches([]);
       await cargarMaterialesPrimas();
       await cargarLotes();
       verificarThresholds(); // verificar stock tras transformación
@@ -1597,6 +1780,11 @@ export default function AdminCostosPage() {
 
   // Registrar Merma Adicional
   const registrarMermaAdicional = async () => {
+    if (!selectedPlantId) {
+      setErr("Selecciona una planta primero.");
+      return;
+    }
+
     if (!transformMaterial || !transformFromState || !wasteQty) {
       setErr("Selecciona materia prima, estado y cantidad.");
       return;
@@ -1635,15 +1823,17 @@ export default function AdminCostosPage() {
         ])
         .select();
 
-      if (batchError) throw new Error(batchError.message);
+      if (batchError) throw batchError;
 
       // Obtener cantidad actual
-      const { data: inventoryData } = await supabase
+      const { data: inventoryData, error: invError } = await supabase
         .from("raw_material_inventory")
         .select("*")
         .eq("raw_material_id", transformMaterial)
         .eq("state_id", transformFromState)
         .eq("plant_id", selectedPlantId);
+
+      if (invError) throw invError;
 
       if (inventoryData && inventoryData[0]) {
         const newQty = (inventoryData[0].quantity || 0) - qty;
@@ -1652,10 +1842,10 @@ export default function AdminCostosPage() {
           .update({ quantity: newQty, last_updated: new Date().toISOString() })
           .eq("id", inventoryData[0].id);
 
-        if (updateError) throw new Error(updateError.message);
+        if (updateError) throw updateError;
 
         // Audit log
-        await supabase.from("raw_material_inventory_audit_logs").insert([
+        const { error: auditError } = await supabase.from("raw_material_inventory_audit_logs").insert([
           {
             raw_material_id: transformMaterial,
             state_id: transformFromState,
@@ -1667,10 +1857,12 @@ export default function AdminCostosPage() {
           },
         ]);
 
+        if (auditError) throw auditError;
+
         // Verificar si la merma es anormal (> 10%)
         const stockAnterior = inventoryData[0].quantity || 0;
         const porcentajeMerma = stockAnterior > 0 ? (qty / stockAnterior) * 100 : 0;
-        
+
         if (porcentajeMerma > 10) {
           await crearAlerta(
             "merma_anormal",
@@ -1684,11 +1876,13 @@ export default function AdminCostosPage() {
 
       // Mensaje de éxito con unidad correcta
       setErr(null);
-      alert(`✓ Merma registrada: ${qty} ${unit} descuentadas`);
-      
+      setSuccess(`✓ Merma registrada: ${qty} ${unit} descuentadas`);
+      setTimeout(() => setSuccess(null), 4000);
+
       // Recargar datos
       await cargarMaterialesPrimas();
-      
+      verificarThresholds(); // Verificar alertas tras merma
+
       // Limpiar formulario
       setTransformMaterial("");
       setTransformFromState("");
@@ -1697,6 +1891,7 @@ export default function AdminCostosPage() {
     } catch (e: any) {
       setErr(e.message ?? "Error registrando merma.");
       console.error("Error en merma:", e);
+      setSuccess(null);
     } finally {
       setSavingWaste(false);
     }
@@ -3726,10 +3921,40 @@ export default function AdminCostosPage() {
                       <FormSelect
                         label="Estado Origen"
                         value={transformFromState}
-                        onChange={setTransformFromState}
+                        onChange={(value) => {
+                          setTransformFromState(value);
+                          loadTransformBatches(transformMaterial, value);
+                        }}
                         options={(statesByMaterial[transformMaterial] ?? []).map((s) => ({ value: s.id, label: s.name }))}
                         disabled={savingTransform}
                       />
+
+                      {transformFromState && (
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">
+                            {loadingTransformBatches ? "Cargando lotes..." : "Seleccionar Lote"}
+                          </label>
+                          <select
+                            value={transformSelectedBatch}
+                            onChange={(e) => setTransformSelectedBatch(e.target.value)}
+                            disabled={savingTransform || loadingTransformBatches || transformAvailableBatches.length === 0}
+                            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            <option value="">
+                              {loadingTransformBatches
+                                ? "Cargando lotes..."
+                                : transformAvailableBatches.length === 0
+                                  ? "No hay lotes disponibles"
+                                  : "Selecciona un lote"}
+                            </option>
+                            {transformAvailableBatches.map((batch) => (
+                              <option key={batch.id} value={batch.id}>
+                                {batch.lot_code} - {batch.quantity_out} {materialesPrimas.find((m) => m.id === transformMaterial)?.unit || "unidades"} - ${batch.cost_per_unit?.toFixed(2) || "0.00"}/unidad
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
 
                       <FormSelect
                         label="Estado Destino"
@@ -3830,20 +4055,46 @@ export default function AdminCostosPage() {
                       <BatchLotSelector
                         batches={batches}
                         selectedBatchId={batchSelect}
-                        onSelectBatch={setBatchSelect}
+                        onSelectBatch={(batchId) => {
+                          const selectedBatch = batches.find((b) => b.id === batchId);
+                          console.log("Lote seleccionado para merma:", {
+                            id: batchId,
+                            lot_code: selectedBatch?.lot_code,
+                            raw_material: selectedBatch?.raw_material_name,
+                            quantity: selectedBatch?.quantity_out,
+                            cost_per_unit: selectedBatch?.cost_per_unit,
+                          });
+                          setBatchSelect(batchId);
+                        }}
                         label="Seleccionar Lote a Descartar"
                       />
 
                       {batchSelect && (
                         <>
-                          <FormInput
-                            label="Cantidad a Descartar *"
-                            value={wasteQty}
-                            onChange={setWasteQty}
-                            type="number"
-                            placeholder="0"
-                            disabled={savingWaste}
-                          />
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">
+                              Cantidad a Descartar *
+                              <span className="text-xs text-gray-500 font-normal ml-2">
+                                ({batches.find((b) => b.id === batchSelect)?.unit || "unidades"})
+                              </span>
+                            </label>
+                            <div className="relative">
+                              <input
+                                type="number"
+                                value={wasteQty}
+                                onChange={(e) => {
+                                  setWasteQty(e.target.value);
+                                }}
+                                placeholder="0"
+                                disabled={savingWaste}
+                                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                                step="0.01"
+                              />
+                              <span className="absolute right-3 top-1/2 transform -translate-y-1/2 text-xs text-gray-500">
+                                Máx: {batches.find((b) => b.id === batchSelect)?.quantity_out || 0}
+                              </span>
+                            </div>
+                          </div>
 
                           {wasteQty && !isNaN(parseFloat(wasteQty)) && parseFloat(wasteQty) > 0 && (
                             <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3 text-sm">
